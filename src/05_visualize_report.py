@@ -21,6 +21,11 @@ import subprocess
 import sys
 from typing import Dict, Any, Tuple
 
+# Ensure repository root is on sys.path
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
