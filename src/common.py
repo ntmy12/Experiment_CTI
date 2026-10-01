@@ -30,6 +30,46 @@ except ImportError:
     roc_auc_score = None
 
 
+_CACHED_IMG_DIR: Optional[str] = None
+
+
+def resolve_image_path(image_dir: str, file_name: str) -> Optional[str]:
+    """
+    Finds the full absolute path of an image file.
+    Robust against nested folders (e.g. data/val2014/val2014)
+    and searches /kaggle/input if necessary, caching the discovered directory.
+    """
+    global _CACHED_IMG_DIR
+
+    # 1. Check cached directory if available
+    if _CACHED_IMG_DIR is not None:
+        cand = os.path.join(_CACHED_IMG_DIR, file_name)
+        if os.path.exists(cand):
+            return cand
+
+    # 2. Check direct path: image_dir / file_name
+    cand = os.path.join(image_dir, file_name)
+    if os.path.exists(cand):
+        _CACHED_IMG_DIR = os.path.dirname(os.path.abspath(cand))
+        return cand
+
+    # 3. Check nested subdirectory: image_dir / val2014 / file_name
+    cand_nested = os.path.join(image_dir, "val2014", file_name)
+    if os.path.exists(cand_nested):
+        _CACHED_IMG_DIR = os.path.dirname(os.path.abspath(cand_nested))
+        return cand_nested
+
+    # 4. Search in /kaggle/input if running on Kaggle
+    if os.path.exists("/kaggle/input"):
+        import glob
+        matches = glob.glob(f"/kaggle/input/**/{file_name}", recursive=True)
+        if matches:
+            _CACHED_IMG_DIR = os.path.dirname(os.path.abspath(matches[0]))
+            return matches[0]
+
+    return None
+
+
 def load_synonyms(path: str) -> Tuple[Dict[str, str], List[str]]:
     """
     Loads synonyms mapping from file.

@@ -40,6 +40,7 @@ from src.common import (
     compute_wilcoxon_p,
     holm_bonferroni,
     bootstrap_auroc,
+    resolve_image_path,
 )
 
 
@@ -404,9 +405,9 @@ def main():
     for img_id, obj_list in tqdm(objects_by_image.items(), desc="Teacher-forcing forward", dynamic_ncols=True, unit="img"):
         file_name = obj_list[0]["file_name"]
         gen_ids = obj_list[0]["gen_ids"]
-        img_path = os.path.join(args.image_dir, file_name)
+        img_path = resolve_image_path(args.image_dir, file_name)
 
-        if not os.path.exists(img_path):
+        if img_path is None or not os.path.exists(img_path):
             continue
 
         raw_img = Image.open(img_path).convert("RGB")

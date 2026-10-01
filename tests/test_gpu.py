@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 
 import importlib
-from src.common import load_synonyms, pieces_to_text, find_mentions, char_to_token, check_word_start
+from src.common import load_synonyms, pieces_to_text, find_mentions, char_to_token, check_word_start, resolve_image_path
 lag_curve = importlib.import_module("src.03_lag_curve")
 get_v_obj_tokens = lag_curve.get_v_obj_tokens
 compute_lag_metrics = lag_curve.compute_lag_metrics
@@ -58,8 +58,9 @@ class TestExperiment1GPU(unittest.TestCase):
         matching_tokens = 0
 
         for img_info in imgs:
-            img_path = os.path.join(self.image_dir, img_info["file_name"])
-            if not os.path.exists(img_path):
+            file_name = img_info["file_name"]
+            img_path = resolve_image_path(self.image_dir, file_name)
+            if img_path is None or not os.path.exists(img_path):
                 continue
 
             raw_img = Image.open(img_path).convert("RGB")

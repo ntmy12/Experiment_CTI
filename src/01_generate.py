@@ -26,6 +26,8 @@ from PIL import Image
 import torch
 from tqdm import tqdm
 
+from src.common import resolve_image_path
+
 
 PROMPT = "USER: <image>\nPlease describe this image in detail. ASSISTANT:"
 
@@ -159,10 +161,10 @@ def main():
         for img_info in tqdm(todo_images, desc=f"Generating {args.split}", dynamic_ncols=True, unit="img"):
             img_id = img_info["id"]
             file_name = img_info["file_name"]
-            img_path = os.path.join(args.image_dir, file_name)
+            img_path = resolve_image_path(args.image_dir, file_name)
 
-            if not os.path.exists(img_path):
-                print(f"Warning: Image file not found: {img_path}. Skipping.")
+            if img_path is None or not os.path.exists(img_path):
+                print(f"Warning: Image file not found: {file_name} in {args.image_dir}. Skipping.")
                 continue
 
             try:
