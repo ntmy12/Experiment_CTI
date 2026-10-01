@@ -134,14 +134,17 @@ def main():
     elif args.load_4bit:
         model_kwargs["load_in_4bit"] = True
 
+    device_map = "auto" if args.device == "cuda" else None
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_id,
-        device_map="auto" if args.device == "cuda" else None,
+        device_map=device_map,
         **model_kwargs
     )
-    if args.device != "cuda" or (not args.load_8bit and not args.load_4bit):
+    if device_map is None:
         model.to(args.device)
     model.eval()
+
+    target_device = model.device if hasattr(model, "device") else args.device
 
     tokenizer = processor.tokenizer
     eos_id = tokenizer.eos_token_id
@@ -165,8 +168,7 @@ def main():
 
             # Process input
             inputs = processor(images=raw_image, text=PROMPT, return_tensors="pt")
-            if args.device == "cuda":
-                inputs = {k: v.to(args.device) for k, v in inputs.items()}
+            inputs = {k: v.to(target_device) for k, v in inputs.items()}
 
             prompt_len = inputs["input_ids"].shape[1]
 

@@ -367,14 +367,17 @@ def main():
     if args.load_8bit:
         model_kwargs["load_in_8bit"] = True
 
+    device_map = "auto" if args.device == "cuda" else None
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_id,
-        device_map="auto" if args.device == "cuda" else None,
+        device_map=device_map,
         **model_kwargs
     )
-    if args.device != "cuda" or not args.load_8bit:
+    if device_map is None:
         model.to(args.device)
     model.eval()
+
+    target_device = model.device if hasattr(model, "device") else args.device
 
     # 4. Group all matched objects by image_id for single forward pass per image
     objects_by_image = collections.defaultdict(list)
@@ -402,8 +405,7 @@ def main():
 
         raw_img = Image.open(img_path).convert("RGB")
         inputs = processor(images=raw_img, text=PROMPT, return_tensors="pt")
-        if args.device == "cuda":
-            inputs = {k: v.to(args.device) for k, v in inputs.items()}
+        inputs = {k: v.to(target_device) for k, v in inputs.items()}
 
         gen_tensor = torch.tensor([gen_ids], device=inputs["input_ids"].device)
         ids = torch.cat([inputs["input_ids"], gen_tensor], dim=1)

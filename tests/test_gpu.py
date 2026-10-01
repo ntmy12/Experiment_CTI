@@ -63,7 +63,7 @@ class TestExperiment1GPU(unittest.TestCase):
                 continue
 
             raw_img = Image.open(img_path).convert("RGB")
-            inputs = self.processor(images=raw_img, text=PROMPT, return_tensors="pt").to("cuda", torch.float16)
+            inputs = self.processor(images=raw_img, text=PROMPT, return_tensors="pt").to(self.model.device, torch.float16)
 
             with torch.no_grad():
                 out = self.model.generate(**inputs, do_sample=False, max_new_tokens=64)
@@ -74,7 +74,7 @@ class TestExperiment1GPU(unittest.TestCase):
                 continue
 
             # Forward pass teacher forcing
-            gen_tensor = torch.tensor([gen_ids], device="cuda")
+            gen_tensor = torch.tensor([gen_ids], device=self.model.device)
             ids = torch.cat([inputs["input_ids"], gen_tensor], dim=1)
 
             with torch.no_grad():
