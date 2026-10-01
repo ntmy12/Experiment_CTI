@@ -1,0 +1,80 @@
+person, person, people, man, men, woman, women, boy, boys, girl, girls, child, children, kid, kids, baby, babies, guy, guys, human, humans, adult, adults, player, players, pedestrian, pedestrians, passenger, passengers, worker, workers, rider, riders, officer, officers, crowd, crowds, spectator, spectators, toddler, toddlers, infant, infants, teenager, teenagers, skater, skaters, biker, bikers, driver, drivers
+bicycle, bicycle, bicycles, bike, bikes, cycle, cycles, bicyclist, bicyclists
+car, car, cars, automobile, automobiles, vehicle, vehicles, auto, autos, sedan, sedans, cab, cabs, taxi, taxis, suv, suvs, coupe, coupes
+motorcycle, motorcycle, motorcycles, motorbike, motorbikes, scooter, scooters, moped, mopeds
+airplane, airplane, airplanes, plane, planes, jet, jets, aircraft, aircrafts, airliner, airliners, biplane, biplanes, aeroplane, aeroplanes
+bus, bus, buses, busses, minibus, minibuses, coach, coaches, schoolbus, trolley, trolleys
+train, train, trains, locomotive, locomotives, subway, subways, railcar, railcars, streetcar, streetcars, freight train
+truck, truck, trucks, pickup, pickups, semi, semis, trailer, trailers, van, vans, lorry, lorries
+boat, boat, boats, ship, ships, vessel, vessels, canoe, canoes, kayak, kayaks, raft, rafts, sailboat, sailboats, yacht, yachts, ferry, ferries, barge, barges, dinghy, dinghies, rowboat, rowboats, speedboat, speedboats
+traffic light, traffic light, traffic lights, traffic signal, traffic signals, stoplight, stoplights
+fire hydrant, fire hydrant, fire hydrants, hydrant, hydrants
+stop sign, stop sign, stop signs
+parking meter, parking meter, parking meters, meter, meters
+bench, bench, benches, pew, pews
+bird, bird, birds, avian, avians, waterfowl, seagull, seagulls, gull, gulls, pigeon, pigeons, dove, doves, duck, ducks, goose, geese, swan, swans, eagle, eagles, hawk, hawks, sparrow, sparrows, owl, owls, crow, crows, raven, ravens, parrot, parrots, pelican, pelicans, flamingo, flamingos
+cat, cat, cats, kitten, kittens, kitty, kitties, feline, felines
+dog, dog, dogs, pup, pups, puppy, puppies, hound, hounds, canine, canines, pooch, pooches
+horse, horse, horses, stallion, stallions, mare, mares, foal, foals, colt, colts, pony, ponies, mustang, mustangs, steed, steeds, equestrian
+sheep, sheep, lamb, lambs, ewe, ewes, ram, rams
+cow, cow, cows, cattle, calf, calves, bull, bulls, ox, oxen, heifer, heifers, bovine, bovines
+elephant, elephant, elephants, tusker, tuskers
+bear, bear, bears, cub, cubs
+zebra, zebra, zebras
+giraffe, giraffe, giraffes
+backpack, backpack, backpacks, rucksack, rucksacks, knapsack, knapsacks, pack, packs, bookbag, bookbags
+umbrella, umbrella, umbrellas, parasol, parasols
+handbag, handbag, handbags, purse, purses, pocketbook, pocketbooks, bag, bags, tote, totes, clutch, clutches
+tie, tie, ties, necktie, neckties, bowtie, bowties
+suitcase, suitcase, suitcases, luggage, luggages, baggage, baggages, trunk, trunks, briefcase, briefcases
+frisbee, frisbee, frisbees, disc, discs
+skis, ski, skis, skier, skiers
+snowboard, snowboard, snowboards, snowboarder, snowboarders
+sports ball, ball, balls, soccer, football, basketball, baseball, tennis, volleyball, softball
+kite, kite, kites
+baseball bat, baseball bat, baseball bats, bat, bats
+baseball glove, baseball glove, baseball gloves, glove, gloves, mitt, mitts, baseball mitt, baseball mitts
+skateboard, skateboard, skateboards, skateboarder, skateboarders
+surfboard, surfboard, surfboards, surfer, surfers, surf board, surf boards
+tennis racket, tennis racket, tennis rackets, racket, rackets, racquet, racquets
+bottle, bottle, bottles, flask, flasks, jug, jugs, canteen, canteens
+wine glass, wine glass, wine glasses, goblet, goblets, chalice, chalices
+cup, cup, cups, mug, mugs, teacup, teacups, coffee cup, coffee cups
+fork, fork, forks
+knife, knife, knives, blade, blades
+spoon, spoon, spoons, teaspoon, teaspoons, tablespoon, tablespoons
+bowl, bowl, bowls, basin, basins
+banana, banana, bananas
+apple, apple, apples
+sandwich, sandwich, sandwiches, burger, burgers, hamburger, hamburgers, cheeseburger, cheeseburgers, sub, subs, hoagie, hoagies
+orange, orange, oranges, citrus, citruses, tangerine, tangerines, clementine, clementines
+broccoli, broccoli, broccolis
+carrot, carrot, carrots
+hot dog, hot dog, hot dogs, hotdog, hotdogs, frankfurter, frankfurters, wiener, wieners
+pizza, pizza, pizzas, pizzeria
+donut, donut, donuts, doughnut, doughnuts
+cake, cake, cakes, cupcake, cupcakes, pastry, pastries, cheesecake, cheesecakes
+chair, chair, chairs, armchair, armchairs, seat, seats, stool, stools, recliner, recliners, highchair, highchairs
+couch, couch, couches, sofa, sofas, settee, settees, futon, futons, loveseat, loveseats, lounge, lounges, daybed, daybeds
+potted plant, potted plant, potted plants, houseplant, houseplants, plant, plants, flowerpot, flowerpots, planter, planters
+bed, bed, beds, bunkbed, bunkbeds, mattress, mattresses, crib, cribs
+dining table, dining table, dining tables, table, tables, desk, desks
+toilet, toilet, toilets, commode, commodes, urinal, urinals, restroom, latrine, latrines
+tv, tv, tvs, television, televisions, monitor, monitors, screen, screens
+laptop, laptop, laptops, computer, computers, notebook, notebooks, netbook, netbooks
+mouse, mouse, mice
+remote, remote, remotes, controller, controllers
+keyboard, keyboard, keyboards, keypad, keypads
+cell phone, cell phone, cell phones, cellphone, cellphones, phone, phones, telephone, telephones, smartphone, smartphones, mobile phone, mobile phones
+microwave, microwave, microwaves, microwave oven
+oven, oven, ovens, stove, stoves, stovetop, stovetops, range, ranges
+toaster, toaster, toasters
+sink, sink, sinks, washbasin, washbasins, basin, basins
+refrigerator, refrigerator, refrigerators, fridge, fridges, freezer, freezers
+book, book, books, novel, novels, textbook, textbooks, paperback, paperbacks, hardcover, hardcovers, booklet, booklets
+clock, clock, clocks, timepiece, timepieces, wristwatch, wristwatches, watch, watches
+vase, vase, vases
+scissors, scissor, scissors, shears
+teddy bear, teddy bear, teddy bears, teddy, teddies, stuffed animal, stuffed animals, stuffed bear, stuffed bears
+hair drier, hair drier, hair driers, hair dryer, hair dryers, blowdryer, blowdryers
+toothbrush, toothbrush, toothbrushes

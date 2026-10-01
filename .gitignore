@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Data and large files
+data/val2014/
+data/*.zip
+data/instances_val2014.json
+data/captions_val2014.json
+data/annotations/
+
+# Results and figures (can be committed or ignored, but outputs can be large)
+results/exp1/*.csv
+results/exp1/*.jsonl
+results/exp1/*.json
+!results/exp1/REPORT.md
+
+# Jupyter
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# OS
+.DS_Store
+Thumbs.db
