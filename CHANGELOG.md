@@ -1,49 +1,49 @@
-# CHANGELOG: Thí nghiệm 1 - "Object đã xuất hiện trước đó bao nhiêu bước?"
+# CHANGELOG: Experiment 1 - "How Many Steps Earlier Does an Object Appear?"
 
-Tài liệu này ghi nhận toàn bộ các quyết định thiết kế, cấu trúc file, và các cải tiến/sửa đổi so với bản nháp ban đầu theo yêu cầu của `EXPERIMENT1_SPEC.md`.
+This document tracks all system architecture implementations, design decisions, and revisions conforming to the requirements outlined in `EXPERIMENT1_SPEC.md`.
 
 ---
 
 ## [1.0.0] - 2026-10-01
 
-### 1. Khởi tạo cấu trúc dự án chuẩn mực
+### 1. Core Architecture and Pipeline Implementation
 - **`src/common.py`**:
-  - Triển khai `pieces_to_text(pieces)`: chuyển đổi chính xác các mảnh token SentencePiece/LLaMA thành văn bản thô, xử lý tiền tố space ` ` (`\u2581`), byte newline `<0x0A>` và các byte `<0xNN>`. Trả về vị trí ký tự span `(char_start, char_end)` cho từng token.
-  - Triển khai `find_mentions(text, syn2canon)`: trích xuất object bằng regex `[A-Za-z]+`, ưu tiên cụm 2 từ (như `teddy bear`, `hot dog`), sau đó 1 từ, xử lý số nhiều (`-ies -> -y`, `-es -> -`, `-s -> -`).
-  - Triển khai `check_word_start(spans, tok_idx, char_start)`: kiểm tra điều kiện word-start (`spans[tok_idx].start == char_start - 1` hoặc `char_start`) nhằm tránh các từ bắt đầu ở giữa token (loại trừ và ghi nhận vào funnel).
-  - Triển khai `build_coco_gt`: hợp nhất categories từ `instances_val2014` và 5 human reference captions.
-  - Triển khai thuật toán ghép cặp 1:1 không hoàn lại (`match_object_pairs`) theo `rel_pos` với caliper $\le 0.1$, random tie-breaking theo seed.
-  - Triển khai bộ thư viện thống kê chuẩn xác: Paired Bootstrap CI ($B=2000$), Cohen's $d_z$, kiểm định Wilcoxon 2 phía, hiệu chỉnh Holm-Bonferroni qua $m = 0..K$, và Bootstrap AUROC.
+  - Implemented `pieces_to_text(pieces)`: accurately reconstructs SentencePiece/LLaMA token pieces into raw text strings, resolving whitespace prefixes (` ` / `\u2581`), byte newline tokens (`<0x0A>`), and arbitrary byte representations (`<0xNN>`). Returns exact character span boundaries `(char_start, char_end)` for each token piece.
+  - Implemented `find_mentions(text, syn2canon)`: extracts object entities via `[A-Za-z]+`, prioritizing 2-word collocations prior to unigrams, applying regular lemmatization (`-ies -> -y`, `-es -> -`, `-s -> -`).
+  - Implemented `check_word_start(spans, tok_idx, char_start)`: enforces valid token word-boundary conditions (`spans[tok_idx].start == char_start - 1` or `char_start`). Non-conforming mentions are filtered and logged to the data funnel (`dropped_not_word_start`).
+  - Implemented `build_coco_gt`: merges category annotations from `instances_val2014` with entities extracted from the 5 human reference captions.
+  - Implemented 1:1 control matching (`match_object_pairs`) on relative sentence position (`rel_pos`) with matching caliper $\le 0.1$, random tie-breaking, and sampling without replacement.
+  - Implemented rigorous statistical methods: Paired Bootstrap Confidence Intervals ($B=2000$), Cohen's $d_z$, two-sided Wilcoxon signed-rank testing, Holm-Bonferroni step-down correction over $m = 0..K$, and Bootstrap AUROC.
 - **`src/01_generate.py`**:
-  - Hỗ trợ đầy đủ tham số `--offset` và `--n_images` để phân chia tập độc lập `dev` `[0, 500)`, `confirm` `[500, 2500)` và `smoke` `[0, 3)`.
-  - Hỗ trợ resume: tự động đọc `captions.jsonl`, bỏ qua các `image_id` đã có và gọi `flush()` từng dòng.
-  - Hỗ trợ `--load_8bit` và `--load_4bit` giúp chạy mượt mà trên GPU Kaggle 16GB (P100 / T4).
+  - Added CLI parameters `--offset` and `--n_images` to enforce non-overlapping cohorts: development (`[0, 500)`), confirmation (`[500, 2500)`), and smoke (`[0, 3)`).
+  - Integrated resumable execution: detects processed `image_id` entries in `captions.jsonl` and flushes buffers per record.
+  - Supported `--load_8bit` and `--load_4bit` options to facilitate execution within 16 GB GPU constraints (P100 / T4).
 - **`src/02_label_chair.py`**:
-  - Gán nhãn CHAIR, kiểm tra word-start, đánh dấu `first=True` cho mention đầu tiên của mỗi category trong caption.
-  - Tính toán và in ra `CHAIR_S` và `CHAIR_I` toàn cục.
-  - Lưu file `data/labels.jsonl` chuẩn schema Mục 5.
+  - Implemented CHAIR evaluation, word-start boundary validation, and primary mention flagging (`first=True`).
+  - Computed macro-level metrics `CHAIR_S` and `CHAIR_I`.
+  - Outputted `data/labels.jsonl` matching Section 5 schema.
 - **`src/03_lag_curve.py`**:
-  - Gom nhóm object theo `image_id` để mỗi ảnh chỉ forward pass teacher-forcing **đúng 1 lần**.
-  - Kiểm tra tiền tố tokenizer của mô hình khi tạo tập $V_{obj}$.
-  - Tính toán và lưu trữ đầy đủ: `logp`, `rank`, `S`, `conf`, `ent`, `logp_actual`.
-  - Ghi nhận `funnel.json` đầy đủ các tầng lọc.
-  - Phân tích thống kê theo cặp (`summary.csv`), độ ổn định seed (seeds 0..19), độ nhạy S1 (caliper 0.05), S2 (unmatched) và S3 (category fixed effect $S_c$).
+  - Batched evaluation by `image_id` ensuring a single teacher-forcing forward pass per image.
+  - Validated tokenizer prefix conventions during vocabulary subset ($V_{obj}$) construction.
+  - Recorded comprehensive step-level metrics: `logp`, `rank`, `S`, `conf`, `ent`, and `logp_actual`.
+  - Recorded attrition metrics in `funnel.json`.
+  - Conducted paired statistical analysis (`summary.csv`), matching stability evaluation across seeds 0..19, and sensitivity analyses (S1 caliper 0.05, S2 unmatched, S3 category fixed-effects).
 - **`src/04_pmc.py`**:
-  - Triển khai phân tích B: tái hiện thước đo Preceding Minimum Confidence (PMC) của TruthPrInt.
-  - Kiểm soát độ dài với các bin $n_{prec}$ (1–3, 4–6, 7–10, $\ge 11$) và trên tập ghép cặp.
-  - Ghi nhận `pmc_records.csv` và `pmc_summary.csv`.
+  - Implemented Question B: reproduction of TruthPrInt Preceding Minimum Confidence (PMC).
+  - Controlled for preceding token window length using $n_{prec}$ bins (1-3, 4-6, 7-10, >=11) and matched pairs.
+  - Exported `pmc_records.csv` and `pmc_summary.csv`.
 - **`src/05_visualize_report.py`**:
-  - Tự động vẽ 5 biểu đồ chất lượng cao (300 DPI): `s_vs_m.png`, `delta_vs_m.png`, `auroc_vs_m.png`, `pmc_by_group.png`, `pmc_by_nprec.png`.
-  - Ghi `run_manifest.json` chứa thông tin môi trường, GPU, seed, SHA-256 của các file data.
-  - Tự động điền dữ liệu thực tế vào `REPORT.md` (10 mục theo Mục 9), tuyệt đối không bịa số và không kết luận nhân quả.
+  - Automated generation of 5 publication-standard figures (300 DPI): `s_vs_m.png`, `delta_vs_m.png`, `auroc_vs_m.png`, `pmc_by_group.png`, `pmc_by_nprec.png`.
+  - Produced `run_manifest.json` recording environment telemetry, hardware identifiers, random seed, and SHA-256 data checksums.
+  - Automated generation of `REPORT.md` following the formal 10-section academic specification.
 - **`tests/test_common.py`**:
-  - Kiểm thử T1: chuỗi chuẩn SentencePiece mẫu, ánh xạ chính xác token index cho `man`, `dogs`, `teddy bear`, `mugs`.
-  - Kiểm thử T2: kiểm tra thuật toán ghép cặp 1:1, caliper, không tái sử dụng object, tính xác định qua seed.
-  - Kiểm thử T3: kiểm tra bootstrap CI, Holm-Bonferroni correction, AUROC.
+  - Test T1: standard SentencePiece benchmark string validation, verifying token indices for `man`, `dogs`, `teddy bear`, and `mugs`.
+  - Test T2: 1:1 control matching algorithm, caliper constraint, non-replacement, and seed determinism.
+  - Test T3: paired bootstrap confidence intervals, Holm-Bonferroni correction, and AUROC calculation.
 - **`tests/test_gpu.py`**:
-  - Kiểm thử T4: căn chỉnh vị trí `argmax(pred[i]) == gen_ids[i]` ($\ge 98\%$), phát hiện lỗi lệch off-by-one.
-  - Kiểm thử T5: tại $m=0$, `rank == 1` cho $\ge 99\%$ object.
+  - Test T4: position alignment verification (`argmax(pred[i]) == gen_ids[i]` $\ge 98\%$) to prevent index off-by-one errors.
+  - Test T5: verification that at $m = 0$, `rank == 1` for $\ge 99\%$ of selected objects.
 - **`data/synonyms.txt`**:
-  - Bộ từ điển từ đồng nghĩa đầy đủ cho 80 danh mục COCO chuẩn nghiên cứu CHAIR.
+  - Full synonym mappings for all 80 COCO categories conforming to CHAIR evaluation literature.
 - **`notebooks/run_kaggle.ipynb`**:
-  - Notebook Kaggle hoàn chỉnh, sạch đẹp, có mục lục tương tác, thanh tiến trình, chạy tuần tự qua các Cổng G0 $\to$ G5, hiển thị biểu đồ và nén kết quả tải về.
+  - Self-contained, modular Kaggle execution notebook structured across Gate milestones G0 through G5 with visual progress tracking.
