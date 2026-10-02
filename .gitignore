@@ -22,10 +22,10 @@ data/captions_val2014.json
 data/annotations/
 
 # Results and figures (can be committed or ignored, but outputs can be large)
-results/exp1/*.csv
-results/exp1/*.jsonl
-results/exp1/*.json
-!results/exp1/REPORT.md
+results/*/*.csv
+results/*/*.jsonl
+results/*/*.json
+!results/*/REPORT.md
 
 # Jupyter
 .ipynb_checkpoints/
