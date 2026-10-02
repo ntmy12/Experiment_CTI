@@ -418,121 +418,114 @@ def run_experiment(args: argparse.Namespace) -> None:
         })
 
     # ------------------------------------------------------------------
-    # 3.6 Run Logit Lens forward passes
+    # 3.6 Run Logit Lens forward passes (or reuse if layer_records.csv exists)
     # ------------------------------------------------------------------
-    layer_records: List[Dict] = []
-    target_device = next(model.parameters()).device
-
-    for image_id, obj_list in tqdm(
-        image_to_objs.items(),
-        desc="Logit Lens forward passes",
-        unit="image",
-    ):
-        # Use file_name from first object in this image's list
-        file_name = obj_list[0]["file_name"]
-        gen_ids = obj_list[0]["gen_ids"]
-        G = obj_list[0]["G"]
-
-        # Resolve image path
-        img_path = resolve_image_path(args.image_dir, file_name)
-        if img_path is None:
-            print(f"Warning: image not found: {file_name}. Skipping.")
-            continue
-
-        image = Image.open(img_path).convert("RGB")
-        inputs = processor(text=PROMPT, images=image, return_tensors="pt")
-        inputs = {k: v.to(target_device) for k, v in inputs.items()}
-
-        gen_tensor = torch.tensor([gen_ids], device=inputs["input_ids"].device)
-        ids = torch.cat([inputs["input_ids"], gen_tensor], dim=1)
-
-        # Forward pass requesting ALL hidden states
-        with torch.no_grad():
-            outputs = model(
-                input_ids=ids,
-                attention_mask=torch.ones_like(ids),
-                pixel_values=inputs["pixel_values"],
-                output_hidden_states=True,
-            )
-
-        # hidden_states: tuple of (n_layers+1) tensors, each (1, L_total, D)
-        # In some transformers versions for LLaVA, hidden_states is nested
-        # under outputs.hidden_states directly (new API) or not present at top
-        # level and must be extracted from the language model output.
-        if outputs.hidden_states is not None and len(outputs.hidden_states) > 0:
-            hidden_states = outputs.hidden_states
-        else:
-            raise RuntimeError(
-                "Model did not return hidden_states. "
-                "Ensure output_hidden_states=True is supported by this model version."
-            )
-
-        L_total = ids.shape[1]
-        L_prompt = L_total - G   # number of prompt tokens
-
-
-        # Process each object's Logit Lens at position t-1 (m=1)
-        for obj in obj_list:
-            t = obj["t"]
-            o_tok_id = obj["tok_id"]
-            if o_tok_id is None:
-                continue
-
-            # Build V_obj union {o} for this object
-            v_union = list(v_obj_ids | {o_tok_id})
-            v_union_tensor = torch.tensor(
-                v_union, dtype=torch.long, device=proj_device
-            )
-            o_in_union_idx = v_union.index(o_tok_id)
-
-            # Position t-1 in full sequence (0-indexed)
-            # gen token y_i is at position L_prompt + i in the full sequence.
-            # t is the index within generated tokens, so:
-            # position of y_{t-1} = L_prompt + (t - 1)
-            pos_t_minus_1 = L_prompt + (t - 1)
-
-            if pos_t_minus_1 < 0 or pos_t_minus_1 >= L_total:
-                continue
-
-            # Move hidden states slice to projection device for computation
-            layer_scores = compute_logit_lens_s(
-                hidden_states=hidden_states,
-                norm_module=norm_module,
-                lm_head_module=lm_head_module,
-                pos=pos_t_minus_1,
-                o_tok_id=o_tok_id,
-                v_union_tensor=v_union_tensor,
-                o_in_union_idx=o_in_union_idx,
-                n_layers=n_layers,
-            )
-
-            for rec in layer_scores:
-                layer_records.append({
-                    "pair_id": obj["pair_id"],
-                    "image_id": image_id,
-                    "canon": obj["canon"],
-                    "group": obj["group"],
-                    "t": t,
-                    "G": G,
-                    "layer": rec["layer"],
-                    "s": rec["s"],
-                    "logp": rec["logp"],
-                    "rank": rec["rank"],
-                    "conf": rec["conf"],
-                    "ent": rec["ent"],
-                })
-
-        # Free memory
-        del outputs, hidden_states, ids
-        torch.cuda.empty_cache()
-
-    # ------------------------------------------------------------------
-    # 3.7 Save layer_records.csv
-    # ------------------------------------------------------------------
-    records_df = pd.DataFrame(layer_records)
     records_path = os.path.join(args.output_dir, "layer_records.csv")
-    records_df.to_csv(records_path, index=False)
-    print(f"Saved {len(records_df)} layer records to {records_path}")
+    if os.path.exists(records_path) and os.path.getsize(records_path) > 1000 and not args.force:
+        print(f"Found existing {records_path}. Loading records to compute summary and figures...")
+        records_df = pd.read_csv(records_path)
+    else:
+        layer_records: List[Dict] = []
+        target_device = next(model.parameters()).device
+
+        for image_id, obj_list in tqdm(
+            image_to_objs.items(),
+            desc="Logit Lens forward passes",
+            unit="image",
+        ):
+            # Use file_name from first object in this image's list
+            file_name = obj_list[0]["file_name"]
+            gen_ids = obj_list[0]["gen_ids"]
+            G = obj_list[0]["G"]
+
+            # Resolve image path
+            img_path = resolve_image_path(args.image_dir, file_name)
+            if img_path is None:
+                print(f"Warning: image not found: {file_name}. Skipping.")
+                continue
+
+            image = Image.open(img_path).convert("RGB")
+            inputs = processor(text=PROMPT, images=image, return_tensors="pt")
+            inputs = {k: v.to(target_device) for k, v in inputs.items()}
+
+            gen_tensor = torch.tensor([gen_ids], device=inputs["input_ids"].device)
+            ids = torch.cat([inputs["input_ids"], gen_tensor], dim=1)
+
+            # Forward pass requesting ALL hidden states
+            with torch.no_grad():
+                outputs = model(
+                    input_ids=ids,
+                    attention_mask=torch.ones_like(ids),
+                    pixel_values=inputs["pixel_values"],
+                    output_hidden_states=True,
+                )
+
+            # hidden_states: tuple of (n_layers+1) tensors, each (1, L_total, D)
+            if outputs.hidden_states is not None and len(outputs.hidden_states) > 0:
+                hidden_states = outputs.hidden_states
+            else:
+                raise RuntimeError(
+                    "Model did not return hidden_states. "
+                    "Ensure output_hidden_states=True is supported by this model version."
+                )
+
+            L_total = ids.shape[1]
+            L_prompt = L_total - G   # number of prompt tokens
+
+            # Process each object's Logit Lens at position t-1 (m=1)
+            for obj in obj_list:
+                t = obj["t"]
+                o_tok_id = obj["tok_id"]
+                if o_tok_id is None:
+                    continue
+
+                # Build V_obj union {o} for this object
+                v_union = list(v_obj_ids | {o_tok_id})
+                v_union_tensor = torch.tensor(
+                    v_union, dtype=torch.long, device=proj_device
+                )
+                o_in_union_idx = v_union.index(o_tok_id)
+
+                # Position t-1 in full sequence (0-indexed)
+                pos_t_minus_1 = L_prompt + (t - 1)
+
+                if pos_t_minus_1 < 0 or pos_t_minus_1 >= L_total:
+                    continue
+
+                layer_scores = compute_logit_lens_s(
+                    hidden_states=hidden_states,
+                    norm_module=norm_module,
+                    lm_head_module=lm_head_module,
+                    pos=pos_t_minus_1,
+                    o_tok_id=o_tok_id,
+                    v_union_tensor=v_union_tensor,
+                    o_in_union_idx=o_in_union_idx,
+                    n_layers=n_layers,
+                )
+
+                for rec in layer_scores:
+                    layer_records.append({
+                        "pair_id": obj["pair_id"],
+                        "image_id": image_id,
+                        "canon": obj["canon"],
+                        "group": obj["group"],
+                        "t": t,
+                        "G": G,
+                        "layer": rec["layer"],
+                        "s": rec["s"],
+                        "logp": rec["logp"],
+                        "rank": rec["rank"],
+                        "conf": rec["conf"],
+                        "ent": rec["ent"],
+                    })
+
+            # Free memory
+            del outputs, hidden_states, ids
+            torch.cuda.empty_cache()
+
+        records_df = pd.DataFrame(layer_records)
+        records_df.to_csv(records_path, index=False)
+        print(f"Saved {len(records_df)} layer records to {records_path}")
 
     # ------------------------------------------------------------------
     # 3.8 Compute per-layer summary statistics
@@ -559,13 +552,18 @@ def run_experiment(args: argparse.Namespace) -> None:
 
         mean_s_h = float(np.mean(s_h))
         mean_s_r = float(np.mean(s_r))
-        mean_delta = float(np.mean(delta))
 
-        ci_lo, ci_hi = paired_bootstrap_delta(s_h, s_r, B=2000, seed=args.seed)
+        mean_delta, ci_lo, ci_hi = paired_bootstrap_delta(delta, n_boot=2000, seed=args.seed)
         dz = cohens_dz(delta)
-        wilcoxon_p = compute_wilcoxon_p(s_h, s_r)
-        frac_h_higher = float(np.mean(s_h > s_r))
-        auroc = bootstrap_auroc(s_r, s_h, B=500, seed=args.seed)
+        wilcoxon_p = compute_wilcoxon_p(delta)
+        frac_h_higher = float(np.mean(delta > 0))
+
+        y_true = np.concatenate([np.ones(len(s_h)), np.zeros(len(s_r))])
+        y_scores = np.concatenate([s_h, s_r])
+        auc, auc_lo, auc_hi = bootstrap_auroc(y_true, y_scores, n_boot=2000, seed=args.seed)
+
+        med_rank_h = float(halluc_df[halluc_df["layer"] == layer]["rank"].median())
+        med_rank_r = float(real_df[real_df["layer"] == layer]["rank"].median())
 
         summary_rows.append({
             "layer": layer,
@@ -578,13 +576,9 @@ def run_experiment(args: argparse.Namespace) -> None:
             "dz": round(dz, 4),
             "wilcoxon_p": wilcoxon_p,
             "frac_halluc_higher": round(frac_h_higher, 4),
-            "auroc_S": round(auroc[0], 4),
-            "median_rank_halluc": float(
-                halluc_df[halluc_df["layer"] == layer]["rank"].median()
-            ),
-            "median_rank_real": float(
-                real_df[real_df["layer"] == layer]["rank"].median()
-            ),
+            "auroc_S": round(auc, 4),
+            "median_rank_halluc": med_rank_h,
+            "median_rank_real": med_rank_r,
         })
 
     # Apply Holm-Bonferroni correction across all layers
@@ -853,8 +847,13 @@ def main() -> None:
         "--seed", type=int, default=0,
         help="Random seed for matching and bootstrap (default: 0)."
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Force re-running forward passes even if layer_records.csv exists."
+    )
     args = parser.parse_args()
     run_experiment(args)
+
 
 
 if __name__ == "__main__":
