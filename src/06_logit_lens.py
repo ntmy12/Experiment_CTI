@@ -290,25 +290,35 @@ def run_experiment(args: argparse.Namespace) -> None:
     )
     model.eval()
 
-    # Number of transformer layers in the LLM backbone
-    n_layers = model.language_model.config.num_hidden_layers
+    # Number of transformer layers in the LLM backbone.
+    # Attribute path differs across transformers versions:
+    #   >= 4.40 : model.language_model.config.num_hidden_layers
+    #   <  4.40 : model.config.text_config.num_hidden_layers
+    if hasattr(model, "language_model"):
+        n_layers = model.language_model.config.num_hidden_layers
+    elif hasattr(model.config, "text_config"):
+        n_layers = model.config.text_config.num_hidden_layers
+    else:
+        n_layers = model.config.num_hidden_layers
     print(f"Model loaded. Transformer layers: {n_layers}")
 
-    # Extract LayerNorm and lm_head for Logit Lens projection
-    # For LLaVA-1.5, the LLM backbone is model.language_model (LlamaModel)
-    try:
+    # Extract LayerNorm and lm_head for Logit Lens projection.
+    # Attribute path also differs across transformers versions:
+    #   >= 4.40 : model.language_model.model.norm / model.language_model.lm_head
+    #   <  4.40 : model.model.norm / model.lm_head
+    if hasattr(model, "language_model"):
         norm_module = model.language_model.model.norm
         lm_head_module = model.language_model.lm_head
-    except AttributeError:
-        # Fallback for alternative attribute paths
+    else:
         norm_module = model.model.norm
         lm_head_module = model.lm_head
 
     norm_module.eval()
     lm_head_module.eval()
 
-    # Move norm and lm_head to a fixed device for projection
+    # Device for Logit Lens projection
     proj_device = next(lm_head_module.parameters()).device
+
 
     # ------------------------------------------------------------------
     # 3.4 Build vocabulary token ID set for S computation
@@ -394,10 +404,20 @@ def run_experiment(args: argparse.Namespace) -> None:
             )
 
         # hidden_states: tuple of (n_layers+1) tensors, each (1, L_total, D)
-        hidden_states = outputs.hidden_states
+        # In some transformers versions for LLaVA, hidden_states is nested
+        # under outputs.hidden_states directly (new API) or not present at top
+        # level and must be extracted from the language model output.
+        if outputs.hidden_states is not None and len(outputs.hidden_states) > 0:
+            hidden_states = outputs.hidden_states
+        else:
+            raise RuntimeError(
+                "Model did not return hidden_states. "
+                "Ensure output_hidden_states=True is supported by this model version."
+            )
 
         L_total = ids.shape[1]
         L_prompt = L_total - G   # number of prompt tokens
+
 
         # Process each object's Logit Lens at position t-1 (m=1)
         for obj in obj_list:
