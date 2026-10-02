@@ -290,34 +290,76 @@ def run_experiment(args: argparse.Namespace) -> None:
     )
     model.eval()
 
-    # Number of transformer layers in the LLM backbone.
-    # Attribute path differs across transformers versions:
-    #   >= 4.40 : model.language_model.config.num_hidden_layers
-    #   <  4.40 : model.config.text_config.num_hidden_layers
-    if hasattr(model, "language_model"):
-        n_layers = model.language_model.config.num_hidden_layers
-    elif hasattr(model.config, "text_config"):
-        n_layers = model.config.text_config.num_hidden_layers
-    else:
-        n_layers = model.config.num_hidden_layers
+    # Resolve number of transformer layers robustly across transformers versions.
+    # Known model structures for LlavaForConditionalGeneration:
+    #   v4.36-4.39 : model.model (LlavaModel) -> language_model (LlamaForCausalLM)
+    #                n_layers via model.config.text_config.num_hidden_layers
+    #   v4.40+     : model.language_model (LlamaForCausalLM) directly
+    #                n_layers via model.language_model.config.num_hidden_layers
+    def _get_attr_path(root, dotted_path: str):
+        """Traverse dotted attribute path, return None if any step fails."""
+        obj = root
+        for attr in dotted_path.split("."):
+            try:
+                obj = getattr(obj, attr)
+            except AttributeError:
+                return None
+        return obj
+
+    # Try all known paths for n_layers
+    n_layers = None
+    for path in [
+        "language_model.config.num_hidden_layers",          # v4.40+
+        "model.language_model.config.num_hidden_layers",    # v4.36-4.39 via LlavaModel
+        "config.text_config.num_hidden_layers",             # fallback via config
+    ]:
+        val = _get_attr_path(model, path)
+        if val is not None:
+            n_layers = int(val)
+            print(f"n_layers resolved via: {path} -> {n_layers}")
+            break
+    if n_layers is None:
+        raise RuntimeError("Could not determine number of transformer layers from model.")
     print(f"Model loaded. Transformer layers: {n_layers}")
 
-    # Extract LayerNorm and lm_head for Logit Lens projection.
-    # Attribute path also differs across transformers versions:
-    #   >= 4.40 : model.language_model.model.norm / model.language_model.lm_head
-    #   <  4.40 : model.model.norm / model.lm_head
-    if hasattr(model, "language_model"):
-        norm_module = model.language_model.model.norm
-        lm_head_module = model.language_model.lm_head
-    else:
-        norm_module = model.model.norm
-        lm_head_module = model.lm_head
+    # Try all known paths for norm_module (final LayerNorm before lm_head)
+    norm_module = None
+    for path in [
+        "language_model.model.norm",          # v4.40+
+        "model.language_model.model.norm",    # v4.36-4.39
+        "language_model.norm",                # some variants
+        "model.language_model.norm",          # some variants
+    ]:
+        val = _get_attr_path(model, path)
+        if val is not None:
+            norm_module = val
+            print(f"norm_module resolved via: model.{path}")
+            break
+    if norm_module is None:
+        raise RuntimeError("Could not find LayerNorm module in model. Check model architecture.")
+
+    # Try all known paths for lm_head (Linear: hidden_dim -> vocab_size)
+    lm_head_module = None
+    for path in [
+        "lm_head",                            # top-level, most versions
+        "language_model.lm_head",             # v4.40+
+        "model.language_model.lm_head",       # v4.36-4.39
+    ]:
+        val = _get_attr_path(model, path)
+        if val is not None and hasattr(val, "weight"):
+            lm_head_module = val
+            print(f"lm_head resolved via: model.{path}")
+            break
+    if lm_head_module is None:
+        raise RuntimeError("Could not find lm_head module in model. Check model architecture.")
 
     norm_module.eval()
     lm_head_module.eval()
 
     # Device for Logit Lens projection
     proj_device = next(lm_head_module.parameters()).device
+    print(f"Projection device: {proj_device}")
+
 
 
     # ------------------------------------------------------------------
