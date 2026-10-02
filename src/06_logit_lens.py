@@ -199,33 +199,43 @@ def compute_logit_lens_s(
     """
     results = []
 
-    for l in range(1, n_layers + 1):
-        # h^(l) at position pos: shape (D,)
-        h_l = hidden_states[l][0, pos, :].float()
+    # Dynamically extract device and dtype from norm_module and lm_head_module
+    norm_param = next(norm_module.parameters())
+    norm_device = norm_param.device
+    norm_dtype = norm_param.dtype
 
-        # Apply final LayerNorm and project to vocabulary
+    lm_param = next(lm_head_module.parameters())
+    lm_device = lm_param.device
+    lm_dtype = lm_param.dtype
+
+    # Ensure v_union_tensor is on lm_device
+    v_union = v_union_tensor.to(lm_device)
+
+    for l in range(1, n_layers + 1):
+        # Extract hidden state at pos and move to norm_module device & dtype (float16)
+        h_l = hidden_states[l][0, pos, :].to(device=norm_device, dtype=norm_dtype)
+
         with torch.no_grad():
-            h_normed = norm_module(h_l.unsqueeze(0)).squeeze(0)  # (D,)
-            z_l = lm_head_module(h_normed)                        # (V,)
+            h_normed = norm_module(h_l.unsqueeze(0)).squeeze(0)
+            # Explicitly match lm_head device and dtype (float16) to avoid float != c10::Half
+            h_normed = h_normed.to(device=lm_device, dtype=lm_dtype)
+            # Project to vocabulary and cast logits to float32 for numerical stability
+            z_l = lm_head_module(h_normed).float()
 
         log_probs = F.log_softmax(z_l, dim=-1)
         probs = log_probs.exp()
 
-        # log P(o | z_l)
         logp = float(log_probs[o_tok_id].item())
-
-        # rank of o
         rank = int((z_l > z_l[o_tok_id]).sum().item()) + 1
 
-        # Normalized score S = log P(o) - logsumexp_{v in V_union} log P(v)
-        sub_log_probs = log_probs[v_union_tensor]
+        sub_log_probs = log_probs[v_union]
         s_score = float(
             (sub_log_probs[o_in_union_idx] - torch.logsumexp(sub_log_probs, dim=-1)).item()
         )
 
-        # Top-1 confidence and Shannon entropy
         conf = float(probs.max().item())
         ent = float(-torch.sum(probs * log_probs).item())
+
 
         results.append({
             "layer": l,
