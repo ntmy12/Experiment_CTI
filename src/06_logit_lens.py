@@ -251,8 +251,9 @@ def run_experiment(args: argparse.Namespace) -> None:
     # 3.1 Load synonyms and build vocabulary set
     # ------------------------------------------------------------------
     print("Loading synonyms...")
-    syn2canon = load_synonyms(args.synonyms_file)
+    syn2canon, canon_list = load_synonyms(args.synonyms_file)
     vocab_words = set(syn2canon.keys())
+
 
     # ------------------------------------------------------------------
     # 3.2 Select matched pairs (reuse Experiment 1 labels)
