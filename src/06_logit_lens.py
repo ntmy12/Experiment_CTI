@@ -165,6 +165,45 @@ def select_candidates(
 
 
 # ---------------------------------------------------------------------------
+# Section 1.5: Vocabulary token set builder (identical to Experiment 1)
+# ---------------------------------------------------------------------------
+
+def get_v_obj_tokens(tokenizer, syn2canon: Dict[str, str]) -> Set[int]:
+    """
+    Builds V_obj token set according to Experiment 1 (Section 4.3 & 6.4):
+    First token id of every word in synonyms.txt.
+    Checks whether tokenizer prepends leading space.
+    """
+    words = list(syn2canon.keys())
+    sample_words = words[:20]
+
+    # Check whether tokenizer prepends leading space
+    test_enc = tokenizer.encode(sample_words[0], add_special_tokens=False)
+    test_piece = tokenizer.convert_ids_to_tokens(test_enc[0])
+    has_leading_space_token = test_piece.startswith(" ") or test_piece.startswith("\u2581")
+
+    v_obj_set = set()
+    sample_log = []
+
+    for w in words:
+        cand_str = " " + w if not has_leading_space_token else w
+        enc = tokenizer.encode(cand_str, add_special_tokens=False)
+        if enc:
+            tok_id = enc[0]
+            v_obj_set.add(tok_id)
+            if len(sample_log) < 10:
+                sample_log.append((w, tok_id, tokenizer.convert_ids_to_tokens(tok_id)))
+
+    print("\nTokenizer V_obj verification (10 samples):")
+    for w, tid, piece in sample_log:
+        print(f"  Word: '{w}' -> Token ID: {tid}, Piece: '{piece}'")
+    print(f"Total V_obj tokens: {len(v_obj_set)}\n")
+    assert len(v_obj_set) > 50, f"Error: V_obj set too small ({len(v_obj_set)}). Tokenizer issue!"
+
+    return v_obj_set
+
+
+# ---------------------------------------------------------------------------
 # Section 2: Logit Lens score computation at a single sequence position
 # ---------------------------------------------------------------------------
 
@@ -177,6 +216,7 @@ def compute_logit_lens_s(
     v_union_tensor: torch.Tensor,
     o_in_union_idx: int,
     n_layers: int,
+    true_logits_at_pos: Any = None,
 ) -> List[Dict[str, Any]]:
     """
     For every transformer layer l in 1..n_layers, project the hidden state at
@@ -193,6 +233,7 @@ def compute_logit_lens_s(
         v_union_tensor    -- LongTensor of vocabulary IDs for V_obj union {o}.
         o_in_union_idx    -- index of o within v_union_tensor.
         n_layers          -- number of transformer layers (e.g. 32).
+        true_logits_at_pos-- optional tensor of model output logits at pos for sanity check.
 
     Returns:
         List of dicts, one per layer, with keys: layer, s, logp, rank, conf, ent.
@@ -222,6 +263,14 @@ def compute_logit_lens_s(
             # Project to vocabulary and cast logits to float32 for numerical stability
             z_l = lm_head_module(h_normed).float()
 
+        # Sanity check at Layer 32: Layer 32 Logit Lens projection MUST match model's actual logits at pos!
+        if l == n_layers and true_logits_at_pos is not None:
+            max_abs_diff = (z_l - true_logits_at_pos.to(device=z_l.device, dtype=z_l.dtype)).abs().max().item()
+            if max_abs_diff > 0.05:
+                print(f"\n[SANITY CHECK WARNING] Layer {n_layers} Logit Lens differs from model output logits! max_diff = {max_abs_diff:.6f}")
+            else:
+                print(f"[SANITY CHECK PASSED] Layer {n_layers} Logit Lens matches model output logits (max_diff = {max_abs_diff:.6f}).")
+
         log_probs = F.log_softmax(z_l, dim=-1)
         probs = log_probs.exp()
 
@@ -236,7 +285,6 @@ def compute_logit_lens_s(
         conf = float(probs.max().item())
         ent = float(-torch.sum(probs * log_probs).item())
 
-
         results.append({
             "layer": l,
             "s": s_score,
@@ -247,6 +295,7 @@ def compute_logit_lens_s(
         })
 
     return results
+
 
 
 # ---------------------------------------------------------------------------
@@ -377,17 +426,11 @@ def run_experiment(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     print("Building COCO vocabulary token ID set...")
     tokenizer = processor.tokenizer
-    v_obj_ids: Set[int] = set()
-    for word in vocab_words:
-        ids = tokenizer.encode(" " + word, add_special_tokens=False)
-        if ids:
-            v_obj_ids.add(ids[0])
+    v_obj_ids = get_v_obj_tokens(tokenizer, syn2canon)
 
     # ------------------------------------------------------------------
     # 3.5 Group matched pairs by image to minimize redundant forward passes
     # ------------------------------------------------------------------
-    # Each image may contribute multiple matched pairs; we run one forward
-    # pass per image and process all pairs from that image together.
     from collections import defaultdict
     image_to_objs: Dict[str, List[Dict]] = defaultdict(list)
 
@@ -418,27 +461,34 @@ def run_experiment(args: argparse.Namespace) -> None:
         })
 
     # ------------------------------------------------------------------
-    # 3.6 Run Logit Lens forward passes (or reuse if layer_records.csv exists)
+    # 3.6 Run Logit Lens forward passes
     # ------------------------------------------------------------------
-    records_path = os.path.join(args.output_dir, "layer_records.csv")
+    records_path = os.path.join(args.output_dir, f"layer_records_m{args.lag_m}.csv")
     if os.path.exists(records_path) and os.path.getsize(records_path) > 1000 and not args.force:
         print(f"Found existing {records_path}. Loading records to compute summary and figures...")
         records_df = pd.read_csv(records_path)
     else:
+        sanity_checked = False
         layer_records: List[Dict] = []
         target_device = next(model.parameters()).device
 
+        print(f"\nEvaluating Logit Lens across layers at lag m = {args.lag_m}:")
+        if args.lag_m == 1:
+            print("  lag_m = 1: Evaluating hidden state at pos = L_prompt + t - 2 (step predicting token t-1).")
+        elif args.lag_m == 0:
+            print("  lag_m = 0: Evaluating hidden state at pos = L_prompt + t - 1 (step predicting token t).")
+        else:
+            print(f"  lag_m = {args.lag_m}: Evaluating hidden state at pos = L_prompt + t - 1 - {args.lag_m}.")
+
         for image_id, obj_list in tqdm(
             image_to_objs.items(),
-            desc="Logit Lens forward passes",
+            desc=f"Logit Lens (lag m={args.lag_m})",
             unit="image",
         ):
-            # Use file_name from first object in this image's list
             file_name = obj_list[0]["file_name"]
             gen_ids = obj_list[0]["gen_ids"]
             G = obj_list[0]["G"]
 
-            # Resolve image path
             img_path = resolve_image_path(args.image_dir, file_name)
             if img_path is None:
                 print(f"Warning: image not found: {file_name}. Skipping.")
@@ -460,7 +510,6 @@ def run_experiment(args: argparse.Namespace) -> None:
                     output_hidden_states=True,
                 )
 
-            # hidden_states: tuple of (n_layers+1) tensors, each (1, L_total, D)
             if outputs.hidden_states is not None and len(outputs.hidden_states) > 0:
                 hidden_states = outputs.hidden_states
             else:
@@ -472,7 +521,7 @@ def run_experiment(args: argparse.Namespace) -> None:
             L_total = ids.shape[1]
             L_prompt = L_total - G   # number of prompt tokens
 
-            # Process each object's Logit Lens at position t-1 (m=1)
+            # Process each object's Logit Lens at lag m
             for obj in obj_list:
                 t = obj["t"]
                 o_tok_id = obj["tok_id"]
@@ -486,22 +535,32 @@ def run_experiment(args: argparse.Namespace) -> None:
                 )
                 o_in_union_idx = v_union.index(o_tok_id)
 
-                # Position t-1 in full sequence (0-indexed)
-                pos_t_minus_1 = L_prompt + (t - 1)
+                # Correct sequence index for lag m:
+                # In causal transformer, hidden state at index pos predicts token pos + 1.
+                # In Experiment 1: pred[t - m] = logits[L_prompt - 1 + t - m]
+                # Hidden state whose projection produces these logits is at:
+                #   pos = L_prompt - 1 + t - m = L_prompt + t - 1 - args.lag_m
+                pos = L_prompt + t - 1 - args.lag_m
 
-                if pos_t_minus_1 < 0 or pos_t_minus_1 >= L_total:
+                if pos < 0 or pos >= L_total:
                     continue
+
+                # Pass model's actual output logits at pos to verify Layer 32 alignment
+                true_logits_at_pos = outputs.logits[0, pos, :] if not sanity_checked else None
 
                 layer_scores = compute_logit_lens_s(
                     hidden_states=hidden_states,
                     norm_module=norm_module,
                     lm_head_module=lm_head_module,
-                    pos=pos_t_minus_1,
+                    pos=pos,
                     o_tok_id=o_tok_id,
                     v_union_tensor=v_union_tensor,
                     o_in_union_idx=o_in_union_idx,
                     n_layers=n_layers,
+                    true_logits_at_pos=true_logits_at_pos,
                 )
+                if not sanity_checked:
+                    sanity_checked = True
 
                 for rec in layer_scores:
                     layer_records.append({
@@ -511,6 +570,7 @@ def run_experiment(args: argparse.Namespace) -> None:
                         "group": obj["group"],
                         "t": t,
                         "G": G,
+                        "lag_m": args.lag_m,
                         "layer": rec["layer"],
                         "s": rec["s"],
                         "logp": rec["logp"],
@@ -519,13 +579,14 @@ def run_experiment(args: argparse.Namespace) -> None:
                         "ent": rec["ent"],
                     })
 
-            # Free memory
             del outputs, hidden_states, ids
             torch.cuda.empty_cache()
 
         records_df = pd.DataFrame(layer_records)
         records_df.to_csv(records_path, index=False)
+        records_df.to_csv(os.path.join(args.output_dir, "layer_records.csv"), index=False)
         print(f"Saved {len(records_df)} layer records to {records_path}")
+
 
     # ------------------------------------------------------------------
     # 3.8 Compute per-layer summary statistics
@@ -588,9 +649,11 @@ def run_experiment(args: argparse.Namespace) -> None:
         row["holm_p"] = hp
 
     summary_df = pd.DataFrame(summary_rows)
-    summary_path = os.path.join(args.output_dir, "layer_summary.csv")
+    summary_path = os.path.join(args.output_dir, f"layer_summary_m{args.lag_m}.csv")
     summary_df.to_csv(summary_path, index=False)
+    summary_df.to_csv(os.path.join(args.output_dir, "layer_summary.csv"), index=False)
     print(f"Saved layer summary to {summary_path}")
+
 
     # ------------------------------------------------------------------
     # 3.9 Visualization
@@ -851,8 +914,13 @@ def main() -> None:
         "--force", action="store_true",
         help="Force re-running forward passes even if layer_records.csv exists."
     )
+    parser.add_argument(
+        "--lag_m", type=int, default=1,
+        help="Lag step m relative to object emission (default: 1 for t-1 prediction step, 0 for emission step)."
+    )
     args = parser.parse_args()
     run_experiment(args)
+
 
 
 
