@@ -8,15 +8,26 @@ These tests require an active GPU and are automatically skipped if CUDA is not a
 import json
 import os
 import unittest
-from PIL import Image
-import torch
-import torch.nn.functional as F
+try:
+    from PIL import Image
+    import torch
+    import torch.nn.functional as F
+    GPU_PACKAGES_AVAILABLE = True
+except ImportError:
+    GPU_PACKAGES_AVAILABLE = False
+    Image = None
+    torch = None
+    F = None
 
 import importlib
 from src.common import load_synonyms, pieces_to_text, find_mentions, char_to_token, check_word_start, resolve_image_path
-lag_curve = importlib.import_module("src.03_lag_curve")
-get_v_obj_tokens = lag_curve.get_v_obj_tokens
-compute_lag_metrics = lag_curve.compute_lag_metrics
+try:
+    lag_curve = importlib.import_module("src.03_lag_curve")
+    get_v_obj_tokens = lag_curve.get_v_obj_tokens
+    compute_lag_metrics = lag_curve.compute_lag_metrics
+except Exception:
+    get_v_obj_tokens = None
+    compute_lag_metrics = None
 
 
 PROMPT = "USER: <image>\nPlease describe this image in detail. ASSISTANT:"
@@ -25,8 +36,8 @@ PROMPT = "USER: <image>\nPlease describe this image in detail. ASSISTANT:"
 class TestExperiment1GPU(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not torch.cuda.is_available():
-            raise unittest.SkipTest("CUDA not available. Skipping GPU sanity tests.")
+        if not GPU_PACKAGES_AVAILABLE or not torch.cuda.is_available():
+            raise unittest.SkipTest("CUDA or GPU packages not available. Skipping GPU sanity tests.")
 
         from transformers import AutoProcessor, LlavaForConditionalGeneration
         cls.model_id = "llava-hf/llava-1.5-7b-hf"
