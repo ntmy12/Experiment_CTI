@@ -315,8 +315,15 @@ class TestExperimentH1Units(unittest.TestCase):
         class MockTensor:
             def __init__(self, shape):
                 self.shape = shape
+                self.device = "cpu"
 
             def clone(self):
+                return MockTensor(self.shape)
+
+            def contiguous(self):
+                return MockTensor(self.shape)
+
+            def to(self, device):
                 return MockTensor(self.shape)
 
             def repeat_interleave(self, repeats, dim=0):

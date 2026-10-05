@@ -91,9 +91,14 @@ def crop_or_repeat_kv_cache(prefix_cache: Any, P: int, batch_size: int = 1) -> A
     """
     Clones and crops the prefix KV-cache to length P, repeating along batch dimension if batch_size > 1.
     Robust against DynamicCache (transformers >= 4.40 with .layers or .key_cache) and legacy tuples.
+    Guarantees contiguous memory, correct device placement, and explicit stream synchronization.
     """
     if prefix_cache is None:
         return None
+
+    # Synchronize all CUDA streams before manipulating cache
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.synchronize()
 
     # 1. If it's a DynamicCache
     if (
@@ -103,7 +108,10 @@ def crop_or_repeat_kv_cache(prefix_cache: Any, P: int, batch_size: int = 1) -> A
         or hasattr(prefix_cache, "crop")
         or hasattr(prefix_cache, "batch_repeat_interleave")
     ):
-        cache_copy = copy.deepcopy(prefix_cache)
+        try:
+            cache_copy = copy.deepcopy(prefix_cache)
+        except Exception:
+            cache_copy = prefix_cache
 
         # Handle crop via modern negative integer API if seq_length > P
         curr_len = None
@@ -128,30 +136,55 @@ def crop_or_repeat_kv_cache(prefix_cache: Any, P: int, batch_size: int = 1) -> A
                 pass
 
         # Direct tensor manipulation fallback (covers both cropping and batch repeating across all versions)
+        # Always enforce .contiguous() and preserve native layer device for multi-GPU setups (device_map="auto")
         if hasattr(cache_copy, "layers"):
             for layer in cache_copy.layers:
                 if hasattr(layer, "keys") and layer.keys is not None:
+                    dev = getattr(layer.keys, "device", None)
                     # Slice along sequence dimension (dim=-2)
                     if layer.keys.shape[-2] > P:
-                        layer.keys = layer.keys[..., :P, :].clone()
+                        layer.keys = layer.keys[..., :P, :].contiguous()
+                    else:
+                        layer.keys = layer.keys.contiguous()
                     if layer.values.shape[-2] > P:
-                        layer.values = layer.values[..., :P, :].clone()
+                        layer.values = layer.values[..., :P, :].contiguous()
+                    else:
+                        layer.values = layer.values.contiguous()
+                    if dev is not None and hasattr(layer.keys, "to"):
+                        layer.keys = layer.keys.to(dev)
+                        layer.values = layer.values.to(dev)
                     # Repeat along batch dimension (dim=0)
                     if batch_size > 1 and layer.keys.shape[0] != batch_size:
-                        layer.keys = layer.keys.repeat_interleave(batch_size, dim=0)
-                        layer.values = layer.values.repeat_interleave(batch_size, dim=0)
+                        layer.keys = layer.keys.repeat_interleave(batch_size, dim=0).contiguous()
+                        layer.values = layer.values.repeat_interleave(batch_size, dim=0).contiguous()
+                        if dev is not None and hasattr(layer.keys, "to"):
+                            layer.keys = layer.keys.to(dev)
+                            layer.values = layer.values.to(dev)
         elif hasattr(cache_copy, "key_cache") and hasattr(cache_copy, "value_cache"):
             for idx in range(len(cache_copy.key_cache)):
                 k = cache_copy.key_cache[idx]
                 v = cache_copy.value_cache[idx]
+                dev = getattr(k, "device", None)
                 if k.shape[-2] > P:
-                    k = k[..., :P, :].clone()
-                    v = v[..., :P, :].clone()
+                    k = k[..., :P, :].contiguous()
+                    v = v[..., :P, :].contiguous()
+                else:
+                    k = k.contiguous()
+                    v = v.contiguous()
+                if dev is not None and hasattr(k, "to"):
+                    k = k.to(dev)
+                    v = v.to(dev)
                 if batch_size > 1 and k.shape[0] != batch_size:
-                    k = k.repeat_interleave(batch_size, dim=0)
-                    v = v.repeat_interleave(batch_size, dim=0)
+                    k = k.repeat_interleave(batch_size, dim=0).contiguous()
+                    v = v.repeat_interleave(batch_size, dim=0).contiguous()
+                    if dev is not None and hasattr(k, "to"):
+                        k = k.to(dev)
+                        v = v.to(dev)
                 cache_copy.key_cache[idx] = k
                 cache_copy.value_cache[idx] = v
+
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         return cache_copy
 
@@ -161,22 +194,35 @@ def crop_or_repeat_kv_cache(prefix_cache: Any, P: int, batch_size: int = 1) -> A
         for layer in prefix_cache:
             if isinstance(layer, (tuple, list)):
                 k, v = layer[0], layer[1]
+                dev = getattr(k, "device", None)
                 if k.shape[-2] > P:
-                    k_cropped = k[..., :P, :].clone()
-                    v_cropped = v[..., :P, :].clone()
+                    k_cropped = k[..., :P, :].contiguous()
+                    v_cropped = v[..., :P, :].contiguous()
                 else:
-                    k_cropped = k.clone()
-                    v_cropped = v.clone()
+                    k_cropped = k.contiguous()
+                    v_cropped = v.contiguous()
+
+                if dev is not None and hasattr(k_cropped, "to"):
+                    k_cropped = k_cropped.to(dev)
+                    v_cropped = v_cropped.to(dev)
 
                 if batch_size > 1 and k_cropped.shape[0] != batch_size:
-                    k_cropped = k_cropped.repeat_interleave(batch_size, dim=0)
-                    v_cropped = v_cropped.repeat_interleave(batch_size, dim=0)
+                    k_cropped = k_cropped.repeat_interleave(batch_size, dim=0).contiguous()
+                    v_cropped = v_cropped.repeat_interleave(batch_size, dim=0).contiguous()
+                    if dev is not None and hasattr(k_cropped, "to"):
+                        k_cropped = k_cropped.to(dev)
+                        v_cropped = v_cropped.to(dev)
                 new_layers.append((k_cropped, v_cropped))
             else:
                 new_layers.append(layer)
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.synchronize()
         return tuple(new_layers)
     else:
-        return copy.deepcopy(prefix_cache)
+        cache_copy = copy.deepcopy(prefix_cache)
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        return cache_copy
 
 
 def run_control_tests(
@@ -347,6 +393,11 @@ def run_control_tests(
             z_g0_1 = out_g0.logits[1, -1, :].float()
         g0_diff = max((z_base - z_g0_0).abs().max().item(), (z_base - z_g0_1).abs().max().item())
         g0_batch_errors.append(g0_diff)
+
+        # Cleanup memory after each control test object
+        del prefix_cache, prefix_out, raw_img, inputs, v_union_tensor, y_prefix, cache_for_base, attn_base, out_base
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # Evaluate Gate B criteria
     max_g0 = max(g0_batch_errors) if g0_batch_errors else 0.0
@@ -584,6 +635,9 @@ def run_experiment(args: argparse.Namespace) -> None:
 
             s0 = compute_s(z_base, o_tok_id, v_union_tensor, o_in_union_idx)
             logp0 = float(F.log_softmax(z_base, dim=-1)[o_tok_id].item())
+            del y_base, cache_base, attn_base, out_base
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             # Evaluate positions j in [t - K, t - 1] (d in [1, K])
             valid_window = set(range(max(0, t - args.K), t - 1))  # W = d in [2, K]
@@ -641,8 +695,11 @@ def run_experiment(args: argparse.Namespace) -> None:
                 conf_j = float(probs_j.max().item())
 
                 for cand in half_A + half_B:
+                    cid = cand["cand_id"]
+                    if tokenizer is not None and not (0 <= cid < tokenizer.vocab_size):
+                        continue
                     y_var = list(gen_ids[:t])
-                    y_var[j] = cand["cand_id"]
+                    y_var[j] = cid
                     cand_meta = dict(cand)
                     cand_meta["j"] = j
                     cand_meta["d"] = d
@@ -655,9 +712,9 @@ def run_experiment(args: argparse.Namespace) -> None:
                 for b_start in range(0, len(variants_to_run), args.batch_size):
                     batch_items = variants_to_run[b_start : b_start + args.batch_size]
                     B = len(batch_items)
-                    b_ids = torch.tensor([item[1] for item in batch_items], device=target_device)
+                    b_ids = torch.tensor([item[1] for item in batch_items], dtype=torch.long, device=target_device)
                     b_cache = crop_or_repeat_kv_cache(prefix_cache, P, batch_size=B)
-                    b_attn = torch.ones((B, P + t), device=target_device)
+                    b_attn = torch.ones((B, P + t), dtype=torch.long, device=target_device)
 
                     with torch.no_grad():
                         b_out = model(
@@ -707,6 +764,8 @@ def run_experiment(args: argparse.Namespace) -> None:
                             "e_logp": round(e_lp, 4),
                         })
                     del b_ids, b_cache, b_attn, b_out, b_logits
+                    if torch is not None and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
             # Compute object metrics on eligible positions W (d in [2, K])
             metrics = compute_object_metrics(effects_by_pos, valid_window)
@@ -738,6 +797,10 @@ def run_experiment(args: argparse.Namespace) -> None:
             else:
                 funnel_counts["dropped_few_positions"] += 1
 
+            del v_union_tensor, logits_all
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             checkpoint_counter += 1
             if checkpoint_counter >= args.checkpoint_interval:
                 # Flush checkpoint
@@ -750,8 +813,10 @@ def run_experiment(args: argparse.Namespace) -> None:
                     obj_df.to_csv(obj_csv_path, index=False)
                 checkpoint_counter = 0
 
-        del prefix_cache, prefix_out
-        torch.cuda.empty_cache()
+        del prefix_cache, prefix_out, inputs, raw_img
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
     # Final flush
     if all_candidate_rows:
@@ -779,7 +844,7 @@ def main():
     parser.add_argument("--match_type", type=str, default="samecat", help="Match type (samecat or pos_only)")
     parser.add_argument("--pos_mode", type=str, default="spacy", choices=["spacy", "lexicon"], help="POS tagging mode")
     parser.add_argument("--K", type=int, default=10, help="Maximum lag window K (default: 10)")
-    parser.add_argument("--batch_size", type=int, default=16, help="Mutation variant batch size (default: 16)")
+    parser.add_argument("--batch_size", type=int, default=8, help="Mutation variant batch size (default: 8)")
     parser.add_argument("--checkpoint_interval", type=int, default=25, help="Objects per checkpoint flush")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit on number of pairs")
     parser.add_argument("--run_controls", action="store_true", help="Run Gate B control tests (G1-G5) on 20 objects")
