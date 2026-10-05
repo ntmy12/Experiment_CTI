@@ -299,6 +299,77 @@ class TestExperimentH1Units(unittest.TestCase):
         self.assertTrue(check_a_an_agreement("the", " dog"))
         self.assertTrue(check_a_an_agreement("some", " apple"))
 
+    # =======================================================================
+    # U6: KV-Cache Cropping & Batch Repeating (DynamicCache + Legacy Tuple)
+    # =======================================================================
+    def test_u6_kv_cache_crop_and_repeat(self):
+        """
+        U6: Validates that crop_or_repeat_kv_cache:
+          1. Correctly crops sequence dimension to length P.
+          2. Correctly repeats batch dimension from 1 to B (e.g. B=16).
+          3. Handles DynamicCache with .layers, with .key_cache, and legacy tuple.
+        """
+        run_h1_mod = importlib.import_module("src.08_run_h1")
+        crop_or_repeat_kv_cache = run_h1_mod.crop_or_repeat_kv_cache
+
+        class MockTensor:
+            def __init__(self, shape):
+                self.shape = shape
+
+            def clone(self):
+                return MockTensor(self.shape)
+
+            def repeat_interleave(self, repeats, dim=0):
+                new_shape = list(self.shape)
+                new_shape[dim] *= repeats
+                return MockTensor(tuple(new_shape))
+
+            def __getitem__(self, item):
+                new_shape = list(self.shape)
+                if isinstance(item, tuple):
+                    for arg in item:
+                        if isinstance(arg, slice) and arg.stop is not None:
+                            new_shape[-2] = min(new_shape[-2], arg.stop)
+                return MockTensor(tuple(new_shape))
+
+        # Case 1: Legacy Tuple of (key, value)
+        k = MockTensor((1, 32, 600, 128))
+        v = MockTensor((1, 32, 600, 128))
+        legacy_cache = ((k, v), (k, v))
+
+        out_legacy = crop_or_repeat_kv_cache(legacy_cache, P=588, batch_size=16)
+        self.assertEqual(len(out_legacy), 2)
+        self.assertEqual(out_legacy[0][0].shape, (16, 32, 588, 128))
+        self.assertEqual(out_legacy[0][1].shape, (16, 32, 588, 128))
+
+        # Case 2: Modern DynamicCache with .layers
+        class MockLayer:
+            def __init__(self, k, v):
+                self.keys = k
+                self.values = v
+
+        class MockDynamicCacheWithLayers:
+            def __init__(self, layers):
+                self.layers = layers
+
+            def get_seq_length(self):
+                return 600
+
+            def crop(self, num):
+                pass
+
+            def batch_repeat_interleave(self, repeats):
+                for layer in self.layers:
+                    layer.keys = layer.keys.repeat_interleave(repeats, dim=0)
+                    layer.values = layer.values.repeat_interleave(repeats, dim=0)
+
+        mock_layers = [MockLayer(MockTensor((1, 32, 600, 128)), MockTensor((1, 32, 600, 128))) for _ in range(2)]
+        dyn_cache = MockDynamicCacheWithLayers(mock_layers)
+
+        out_dyn = crop_or_repeat_kv_cache(dyn_cache, P=588, batch_size=16)
+        self.assertEqual(out_dyn.layers[0].keys.shape, (16, 32, 588, 128))
+        self.assertEqual(out_dyn.layers[0].values.shape, (16, 32, 588, 128))
+
 
 if __name__ == "__main__":
     unittest.main()

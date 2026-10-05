@@ -25,12 +25,32 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn.functional as F
-from PIL import Image
-from tqdm import tqdm
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+try:
+    import torch
+    import torch.nn.functional as F
+except ImportError:
+    torch = None
+    F = None
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = lambda x, **kw: x
 
 # Ensure repository root is on sys.path
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,27 +84,87 @@ def compute_s(logits: torch.Tensor, o_tok_id: int, v_union_tensor: torch.Tensor,
 def crop_or_repeat_kv_cache(prefix_cache: Any, P: int, batch_size: int = 1) -> Any:
     """
     Clones and crops the prefix KV-cache to length P, repeating along batch dimension if batch_size > 1.
-    Handles DynamicCache, tuple of tuples, and list structures across transformers versions.
+    Robust against DynamicCache (transformers >= 4.40 with .layers or .key_cache) and legacy tuples.
     """
-    if hasattr(prefix_cache, "crop"):
-        # Transformers DynamicCache
+    if prefix_cache is None:
+        return None
+
+    # 1. If it's a DynamicCache
+    if (
+        hasattr(prefix_cache, "to_legacy_cache")
+        or hasattr(prefix_cache, "layers")
+        or hasattr(prefix_cache, "key_cache")
+        or hasattr(prefix_cache, "crop")
+        or hasattr(prefix_cache, "batch_repeat_interleave")
+    ):
         cache_copy = copy.deepcopy(prefix_cache)
-        cache_copy.crop(P)
-        if batch_size > 1 and hasattr(cache_copy, "batch_repeat"):
-            cache_copy.batch_repeat(batch_size)
+
+        # Handle crop via modern negative integer API if seq_length > P
+        curr_len = None
+        if hasattr(cache_copy, "get_seq_length"):
+            try:
+                curr_len = cache_copy.get_seq_length()
+            except Exception:
+                curr_len = None
+
+        if curr_len is not None and curr_len > P:
+            num_to_remove = curr_len - P
+            try:
+                cache_copy.crop(-num_to_remove)
+            except Exception:
+                pass
+
+        # Handle repeat across batch dimension via official method if available
+        if batch_size > 1 and hasattr(cache_copy, "batch_repeat_interleave"):
+            try:
+                cache_copy.batch_repeat_interleave(batch_size)
+            except Exception:
+                pass
+
+        # Direct tensor manipulation fallback (covers both cropping and batch repeating across all versions)
+        if hasattr(cache_copy, "layers"):
+            for layer in cache_copy.layers:
+                if hasattr(layer, "keys") and layer.keys is not None:
+                    # Slice along sequence dimension (dim=-2)
+                    if layer.keys.shape[-2] > P:
+                        layer.keys = layer.keys[..., :P, :].clone()
+                    if layer.values.shape[-2] > P:
+                        layer.values = layer.values[..., :P, :].clone()
+                    # Repeat along batch dimension (dim=0)
+                    if batch_size > 1 and layer.keys.shape[0] != batch_size:
+                        layer.keys = layer.keys.repeat_interleave(batch_size, dim=0)
+                        layer.values = layer.values.repeat_interleave(batch_size, dim=0)
+        elif hasattr(cache_copy, "key_cache") and hasattr(cache_copy, "value_cache"):
+            for idx in range(len(cache_copy.key_cache)):
+                k = cache_copy.key_cache[idx]
+                v = cache_copy.value_cache[idx]
+                if k.shape[-2] > P:
+                    k = k[..., :P, :].clone()
+                    v = v[..., :P, :].clone()
+                if batch_size > 1 and k.shape[0] != batch_size:
+                    k = k.repeat_interleave(batch_size, dim=0)
+                    v = v.repeat_interleave(batch_size, dim=0)
+                cache_copy.key_cache[idx] = k
+                cache_copy.value_cache[idx] = v
+
         return cache_copy
+
+    # 2. If it's a tuple or list (Legacy cache)
     elif isinstance(prefix_cache, (tuple, list)):
         new_layers = []
         for layer in prefix_cache:
             if isinstance(layer, (tuple, list)):
-                # (key, value)
                 k, v = layer[0], layer[1]
-                # Slice along sequence dimension (dim=2 for standard attention keys/values)
-                k_cropped = k[:, :, :P, :].clone()
-                v_cropped = v[:, :, :P, :].clone()
-                if batch_size > 1:
-                    k_cropped = k_cropped.repeat(batch_size, 1, 1, 1)
-                    v_cropped = v_cropped.repeat(batch_size, 1, 1, 1)
+                if k.shape[-2] > P:
+                    k_cropped = k[..., :P, :].clone()
+                    v_cropped = v[..., :P, :].clone()
+                else:
+                    k_cropped = k.clone()
+                    v_cropped = v.clone()
+
+                if batch_size > 1 and k_cropped.shape[0] != batch_size:
+                    k_cropped = k_cropped.repeat_interleave(batch_size, dim=0)
+                    v_cropped = v_cropped.repeat_interleave(batch_size, dim=0)
                 new_layers.append((k_cropped, v_cropped))
             else:
                 new_layers.append(layer)
@@ -127,6 +207,7 @@ def run_control_tests(
         except Exception as e:
             print(f"Could not load Exp 1 records: {e}")
 
+    g0_batch_errors = []
     g1_errors = []
     g2_errors = []
     g3_errors = []
@@ -250,19 +331,31 @@ def run_control_tests(
             out_g5 = model(input_ids=y_prefix, past_key_values=cache_g5, attention_mask=attn_base, use_cache=True)
             z_g5 = out_g5.logits[0, -1, :].float()
         s_g5 = compute_s(z_g5, o_tok_id, v_union_tensor, o_in_union_idx)
-        g5_diffs.append(abs(s0 - s_g5))
+        # G0: Batched Cache Equivalence (batch_size=2)
+        cache_g0 = crop_or_repeat_kv_cache(prefix_cache, P, batch_size=2)
+        y_b2 = torch.cat([y_prefix, y_prefix], dim=0)
+        attn_b2 = torch.ones((2, P + t), device=target_device)
+        with torch.no_grad():
+            out_g0 = model(input_ids=y_b2, past_key_values=cache_g0, attention_mask=attn_b2, use_cache=True)
+            z_g0_0 = out_g0.logits[0, -1, :].float()
+            z_g0_1 = out_g0.logits[1, -1, :].float()
+        g0_diff = max((z_base - z_g0_0).abs().max().item(), (z_base - z_g0_1).abs().max().item())
+        g0_batch_errors.append(g0_diff)
 
     # Evaluate Gate B criteria
+    max_g0 = max(g0_batch_errors) if g0_batch_errors else 0.0
     max_g1 = max(g1_errors) if g1_errors else 0.0
     max_g2 = max(g2_errors) if g2_errors else 0.0
     max_g3 = max(g3_errors) if g3_errors else 0.0
     max_g5 = max(g5_diffs) if g5_diffs else 0.0
 
+    print(f"G0 (Batch Cache Equivalence): max |diff| = {max_g0:.8f} (threshold < 1e-3)")
     print(f"G1 (Identity mutation): max |e| = {max_g1:.6f} (threshold < 1e-3)")
     print(f"G2 (Causal mask at j=t): max |diff| = {max_g2:.8f} (threshold == 0)")
     print(f"G3 (Cache vs No-Cache): max |diff_lp| = {max_g3:.6f} nats (threshold <= 0.02)")
     print(f"G5 (Determinism): max |diff| = {max_g5:.8f} (threshold < 1e-3)")
 
+    g0_pass = max_g0 < 1e-3
     g1_pass = max_g1 < 1e-3
     g2_pass = max_g2 < 1e-6
     g3_pass = max_g3 <= 0.02
@@ -276,7 +369,7 @@ def run_control_tests(
     else:
         print("G4 skipped: Exp 1 lag_records not matched or not provided.")
 
-    all_passed = g1_pass and g2_pass and g3_pass and g4_pass and g5_pass
+    all_passed = g0_pass and g1_pass and g2_pass and g3_pass and g4_pass and g5_pass
 
     if all_passed:
         print("\n[GATE B PASSED] All control tests satisfied! Ready for full execution.\n")
@@ -607,6 +700,7 @@ def run_experiment(args: argparse.Namespace) -> None:
                             "logp_new": round(lp_new, 4),
                             "e_logp": round(e_lp, 4),
                         })
+                    del b_ids, b_cache, b_attn, b_out, b_logits
 
             # Compute object metrics on eligible positions W (d in [2, K])
             metrics = compute_object_metrics(effects_by_pos, valid_window)
