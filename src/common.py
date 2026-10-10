@@ -458,6 +458,19 @@ def holm_bonferroni(p_values: List[float]) -> List[float]:
     return adj_p
 
 
+def _calc_auc(y_true: np.ndarray, y_scores: np.ndarray) -> float:
+    """Calculates AUROC using roc_auc_score if available, else Mann-Whitney rank sum."""
+    if roc_auc_score is not None:
+        return float(roc_auc_score(y_true, y_scores))
+    pos = y_scores[y_true == 1]
+    neg = y_scores[y_true == 0]
+    n_pos, n_neg = len(pos), len(neg)
+    if n_pos == 0 or n_neg == 0:
+        return 0.5
+    diffs = pos[:, None] - neg[None, :]
+    return float(np.sum(diffs > 0) + 0.5 * np.sum(diffs == 0)) / (n_pos * n_neg)
+
+
 def bootstrap_auroc(
     y_true: np.ndarray,
     y_scores: np.ndarray,
@@ -472,7 +485,7 @@ def bootstrap_auroc(
         return 0.5, 0.5, 0.5
 
     try:
-        base_auc = float(roc_auc_score(y_true, y_scores))
+        base_auc = _calc_auc(y_true, y_scores)
     except Exception:
         return 0.5, 0.5, 0.5
 
@@ -486,7 +499,7 @@ def bootstrap_auroc(
         if len(np.unique(sub_true)) < 2:
             continue
         try:
-            boot_aucs.append(roc_auc_score(sub_true, y_scores[indices]))
+            boot_aucs.append(_calc_auc(sub_true, y_scores[indices]))
         except Exception:
             pass
 

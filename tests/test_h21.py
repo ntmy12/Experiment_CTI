@@ -222,3 +222,67 @@ def test_analysis_pipeline_smoke():
     assert "A3_mediation" in res
     assert "A4_distance" in res
     assert "A5_robustness_black" in res
+
+
+# =============================================================================
+# 7. COCO Dataset Loader & Sampling Test
+# =============================================================================
+def test_coco_dataset_sampling(tmp_path):
+    """Validates COCODataset image sampling, category indexing, and path discovery."""
+    import json
+    from data import COCODataset
+    from PIL import Image
+
+    img_dir = tmp_path / "val2014"
+    img_dir.mkdir()
+
+    # Image 1 exists and has >= 2 categories
+    img1_path = img_dir / "COCO_val2014_000000000001.jpg"
+    Image.new("RGB", (100, 100), color="red").save(img1_path)
+
+    # Image 2 exists but has only 1 category
+    img2_path = img_dir / "COCO_val2014_000000000002.jpg"
+    Image.new("RGB", (100, 100), color="blue").save(img2_path)
+
+    # Dummy instances JSON
+    ann_data = {
+        "categories": [
+            {"id": 1, "name": "dog"},
+            {"id": 2, "name": "cat"},
+        ],
+        "images": [
+            {"id": 1, "file_name": "COCO_val2014_000000000001.jpg", "width": 100, "height": 100},
+            {"id": 2, "file_name": "COCO_val2014_000000000002.jpg", "width": 100, "height": 100},
+            {"id": 3, "file_name": "COCO_val2014_000000000003.jpg", "width": 100, "height": 100},
+        ],
+        "annotations": [
+            {"image_id": 1, "category_id": 1, "bbox": [0, 0, 50, 50]},
+            {"image_id": 1, "category_id": 2, "bbox": [50, 50, 50, 50]},
+            {"image_id": 2, "category_id": 1, "bbox": [0, 0, 100, 100]},
+            {"image_id": 3, "category_id": 1, "bbox": [0, 0, 10, 10]},
+            {"image_id": 3, "category_id": 2, "bbox": [10, 10, 10, 10]},
+        ],
+    }
+    ann_path = tmp_path / "instances_val2014.json"
+    with open(ann_path, "w", encoding="utf-8") as f:
+        json.dump(ann_data, f)
+
+    coco = COCODataset(val2014_dir=str(img_dir), instances_json=str(ann_path), seed=42)
+
+    # Verify both singular and plural attributes work
+    assert coco.image_to_categories[1] == {"dog", "cat"}
+    assert coco.images_to_categories[1] == {"dog", "cat"}
+    assert coco.image_to_categories[2] == {"dog"}
+
+    # Sampling 1 image should select only Image 1 (Image 2 has <2 cats, Image 3 not on disk)
+    sampled = coco.sample_images(n_images=1)
+    assert sampled == [1]
+
+    # Test salience and in_gt
+    salience, in_gt = coco.get_salience_and_in_gt(1, "dog")
+    assert in_gt == 1
+    assert pytest.approx(salience, abs=1e-5) == (50 * 50) / (100 * 100)
+
+    salience_absent, in_gt_absent = coco.get_salience_and_in_gt(1, "elephant")
+    assert in_gt_absent == 0
+    assert salience_absent == 0.0

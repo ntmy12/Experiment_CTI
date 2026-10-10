@@ -22,6 +22,14 @@ data/captions_val2014.json
 data/annotations/
 
 # Results and figures (can be committed or ignored, but outputs can be large)
+results/*.csv
+results/*.json
+results/*.jsonl
+results/*.html
+results/*.md
+results/figs/
+results/exp2_logitlens/
+results/h1/
 results/*/*.csv
 results/*/*.jsonl
 results/*/*.json

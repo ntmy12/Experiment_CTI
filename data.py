@@ -77,6 +77,11 @@ class COCODataset:
             f"and annotations for COCO."
         )
 
+    @property
+    def images_to_categories(self) -> Dict[int, Set[str]]:
+        """Alias for backward compatibility."""
+        return self.image_to_categories
+
     def sample_images(self, n_images: int = 20, save_path: Optional[str] = None) -> List[int]:
         """
         Samples n_images with seed 42 among images that have >= 2 distinct annotated categories,
@@ -85,7 +90,7 @@ class COCODataset:
         """
         # Find eligible images
         eligible_ids = []
-        for iid, cats in self.images_to_categories.items():
+        for iid, cats in self.image_to_categories.items():
             if len(cats) >= 2:
                 # Check if image file actually exists on disk
                 img_path = self.get_image_path(iid)
@@ -114,21 +119,54 @@ class COCODataset:
 
         return sampled_ids
 
+    def _resolve_image_candidate(self, file_name: str) -> Optional[str]:
+        """Checks cached directory, direct path, nested subdirectory, or glob matches."""
+        if getattr(self, "_cached_img_dir", None):
+            cand = os.path.join(self._cached_img_dir, file_name)
+            if os.path.isfile(cand):
+                return cand
+
+        # 1. Direct path
+        cand = os.path.join(self.val2014_dir, file_name)
+        if os.path.isfile(cand):
+            self._cached_img_dir = os.path.dirname(os.path.abspath(cand))
+            return cand
+
+        # 2. Nested val2014
+        cand_nested = os.path.join(self.val2014_dir, "val2014", file_name)
+        if os.path.isfile(cand_nested):
+            self._cached_img_dir = os.path.dirname(os.path.abspath(cand_nested))
+            return cand_nested
+
+        # 3. Subdirectories in val2014_dir
+        if os.path.isdir(self.val2014_dir):
+            import glob
+            matches = glob.glob(os.path.join(self.val2014_dir, "**", file_name), recursive=True)
+            if matches:
+                self._cached_img_dir = os.path.dirname(os.path.abspath(matches[0]))
+                return matches[0]
+
+        # 4. Search in /kaggle/input if on Kaggle
+        if os.path.exists("/kaggle/input"):
+            import glob
+            matches = glob.glob(f"/kaggle/input/**/{file_name}", recursive=True)
+            if matches:
+                self._cached_img_dir = os.path.dirname(os.path.abspath(matches[0]))
+                return matches[0]
+
+        return None
+
     def get_image_path(self, image_id: int) -> Optional[str]:
         """Returns the absolute path to the image file, trying standard COCO naming."""
         img_info = self.images_info.get(image_id)
         if img_info and "file_name" in img_info:
-            cand = os.path.join(self.val2014_dir, img_info["file_name"])
-            if os.path.isfile(cand):
+            cand = self._resolve_image_candidate(img_info["file_name"])
+            if cand:
                 return cand
 
         # Default COCO val2014 format: COCO_val2014_000000000000.jpg
         formatted_name = f"COCO_val2014_{image_id:012d}.jpg"
-        cand = os.path.join(self.val2014_dir, formatted_name)
-        if os.path.isfile(cand):
-            return cand
-
-        return None
+        return self._resolve_image_candidate(formatted_name)
 
     def load_image(self, image_id: int) -> Image.Image:
         """Loads and returns PIL RGB Image."""
