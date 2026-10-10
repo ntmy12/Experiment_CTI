@@ -30,7 +30,7 @@ def auto_discover_coco_paths(
         return val_img, val_ann
 
     if search_roots is None:
-        search_roots = ["/kaggle/input", "./data", "../data", os.path.expanduser("~/data")]
+        search_roots = ["/kaggle/input", "./data", "../data", os.path.expanduser("~/data"), "."]
 
     candidate_dirs = []
     candidate_anns = []
@@ -38,16 +38,18 @@ def auto_discover_coco_paths(
     for root in search_roots:
         if not os.path.exists(root):
             continue
-        # Search for val2014 directories
-        for dirpath, dirnames, _ in os.walk(root):
-            for d in dirnames:
-                if d == "val2014":
-                    candidate_dirs.append(os.path.join(dirpath, d))
-            # Also check for instances_val2014.json
-            if "instances_val2014.json" in os.listdir(dirpath):
-                candidate_anns.append(os.path.join(dirpath, "instances_val2014.json"))
+        try:
+            for dirpath, dirnames, filenames in os.walk(root):
+                for d in dirnames:
+                    if d.lower() == "val2014":
+                        candidate_dirs.append(os.path.join(dirpath, d))
+                for f in filenames:
+                    if f.lower() == "instances_val2014.json":
+                        candidate_anns.append(os.path.join(dirpath, f))
+        except Exception as e:
+            logger.warning(f"Error scanning {root} during COCO path discovery: {e}")
 
-    logger.info(f"COCO auto-discovery candidates found:")
+    logger.info("COCO auto-discovery candidates found:")
     logger.info(f"  val2014 directories ({len(candidate_dirs)}): {candidate_dirs}")
     logger.info(f"  instances_val2014.json files ({len(candidate_anns)}): {candidate_anns}")
 
@@ -55,6 +57,56 @@ def auto_discover_coco_paths(
     selected_ann = val_ann or (candidate_anns[0] if candidate_anns else None)
 
     return selected_dir, selected_ann
+
+
+def ensure_coco_annotations(ann_path: Optional[str], target_dir: str = "data") -> str:
+    """
+    Ensures instances_val2014.json exists.
+    If the file is not found locally or in /kaggle/input, downloads and extracts
+    the official COCO 2014 validation annotations.
+    """
+    if ann_path and os.path.isfile(ann_path):
+        return os.path.abspath(ann_path)
+
+    local_target = os.path.join(target_dir, "instances_val2014.json")
+    if os.path.isfile(local_target):
+        return os.path.abspath(local_target)
+
+    # Search again in case it exists in subdirectories
+    for root in ["/kaggle/input", "./data", "../data", "."]:
+        if os.path.exists(root):
+            for dirpath, _, filenames in os.walk(root):
+                for f in filenames:
+                    if f.lower() == "instances_val2014.json":
+                        return os.path.abspath(os.path.join(dirpath, f))
+
+    logger.info(
+        "instances_val2014.json not found in input directories. "
+        "Downloading official COCO 2014 validation annotations (~241 MB)..."
+    )
+    import urllib.request
+    import zipfile
+
+    os.makedirs(target_dir, exist_ok=True)
+    zip_path = os.path.join(target_dir, "annotations_trainval2014.zip")
+    url = "http://images.cocodataset.org/annotations/annotations_trainval2014.zip"
+
+    urllib.request.urlretrieve(url, zip_path)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.namelist():
+            if "instances_val2014.json" in member:
+                with zf.open(member) as src, open(local_target, "wb") as dst:
+                    dst.write(src.read())
+                break
+
+    if os.path.isfile(zip_path):
+        try:
+            os.remove(zip_path)
+        except Exception:
+            pass
+
+    logger.info(f"Successfully downloaded and extracted annotations to {local_target}")
+    return os.path.abspath(local_target)
 
 
 @dataclass
@@ -115,6 +167,10 @@ class Config:
             self.val2014_dir = found_img
         if found_ann:
             self.instances_json = found_ann
+
+        # If instances_json still doesn't exist on disk, auto-download
+        if not os.path.isfile(self.instances_json):
+            self.instances_json = ensure_coco_annotations(self.instances_json)
 
     @property
     def captions_path(self) -> str:

@@ -256,7 +256,7 @@ def main():
     with logging_redirect_tqdm():
         outer_pbar = tqdm(
             sampled_image_ids,
-            desc="Ảnh",
+            desc="Images",
             total=len(sampled_image_ids),
             file=sys.stdout,
             dynamic_ncols=True,

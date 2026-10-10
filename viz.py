@@ -164,7 +164,7 @@ def plot_fig1_caption_strips(
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cbar = fig.colorbar(sm, cax=cbar_ax, orientation="horizontal")
-        cbar.set_label("Đóng góp của ảnh ($V_t \in [0, 1]$)", fontsize=10)
+        cbar.set_label(r"Đóng góp của ảnh ($V_t \in [0, 1]$)", fontsize=10)
 
         plt.savefig(out_path, dpi=200)
         plt.close()
@@ -379,7 +379,10 @@ def plot_fig5_mediation(analysis_res: Dict[str, Any], output_path: str):
     prop_med = ols_res.get("proportion_mediated", {})
 
     # Left: Regression coefficients
-    models = ["M1: Không có $V_t$\n($S_t \sim t+k+...$)", "M2: Có kiểm soát $V_t$\n($S_t \sim t+V_t+...$)"]
+    models = [
+        "M1: Không có $V_t$\n" + r"($S_t \sim t+k+...$)",
+        "M2: Có kiểm soát $V_t$\n" + r"($S_t \sim t+V_t+...$)",
+    ]
     vals = [m1_bt.get("estimate", 0.0), m2_bt.get("estimate", 0.0)]
     lows = [m1_bt.get("ci_lower", 0.0), m2_bt.get("ci_lower", 0.0)]
     ups = [m1_bt.get("ci_upper", 0.0), m2_bt.get("ci_upper", 0.0)]
@@ -458,9 +461,10 @@ def plot_fig6_case_studies(df: pd.DataFrame, output_dir: str) -> List[str]:
             f"| Object: '{obj_word}' (t={t}) | Can thiệp tại s={s}: '{orig_tok}' -> '{alt_tok}'"
         )
         ax_text.text(0.0, 0.75, title_text, fontsize=12, fontweight="bold", color="#111111")
+        delta_p_val = row["delta_p"]
         ax_text.text(
             0.0, 0.25,
-            f"Kết quả: $S_t$ = {s_t:.4f} | Flip = {flip} | $\Delta p$ = {row['delta_p']:.4f} | $V_t$ = {row['V_t']:.4f}",
+            f"Kết quả: $S_t$ = {s_t:.4f} | Flip = {flip} | " + r"$\Delta p$" + f" = {delta_p_val:.4f} | $V_t$ = {row['V_t']:.4f}",
             fontsize=11, color="#D55E00" if s_t > 0.3 else "#0072B2", fontweight="bold"
         )
 

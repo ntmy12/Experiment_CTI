@@ -35,6 +35,10 @@ class COCODataset:
     def _load_annotations(self):
         """Loads instances_val2014.json and indexes annotations by image_id."""
         if not os.path.isfile(self.instances_json):
+            from config import ensure_coco_annotations
+            self.instances_json = ensure_coco_annotations(self.instances_json)
+
+        if not os.path.isfile(self.instances_json):
             raise FileNotFoundError(
                 f"instances_val2014.json not found at {self.instances_json}. "
                 "Ensure COCO annotations exist or specify correct path."
