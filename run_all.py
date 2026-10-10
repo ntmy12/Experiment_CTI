@@ -389,6 +389,10 @@ def main():
             [(t, 1, 0) for t in chosen_placebo]
         )
 
+        caption_cache = {}
+        pixel_cache = {}
+        orig_prefix_cache = {}
+
         with tqdm(
             total=len(all_triplets),
             desc="E3 Can thiệp Nhân quả (Triplets)",
@@ -408,6 +412,9 @@ def main():
                         cfg=cfg,
                         is_placebo=is_plac,
                         is_far=is_far,
+                        caption_cache=caption_cache,
+                        pixel_cache=pixel_cache,
+                        orig_prefix_cache=orig_prefix_cache,
                     )
                     append_csv_rows(cfg.records_e3_path, e3_rows, columns=list(e3_rows[0].keys()) if e3_rows else [])
                     append_csv_rows(cfg.records_e3_temp_path, temp_rows, columns=list(temp_rows[0].keys()) if temp_rows else [])
@@ -416,6 +423,8 @@ def main():
 
                 pbar_e3.update(1)
                 pbar_e3.set_postfix({"triplet": idx + 1, "k": trip.get("k", 0)})
+                if (idx + 1) % 25 == 0 or (idx + 1) == len(all_triplets):
+                    logger.info(f"E3 Tiến độ: {idx+1}/{len(all_triplets)} triplets ({((idx+1)/len(all_triplets))*100:.1f}%)")
 
     # =========================================================================
     # STAGE ANALYSIS: Pre-registered Statistical Testing

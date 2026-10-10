@@ -91,6 +91,9 @@ def run_e3_triplet(
     cfg: ConfigV2,
     is_placebo: int = 0,
     is_far: int = 0,
+    caption_cache: Optional[Dict[int, Tuple[torch.Tensor, torch.Tensor]]] = None,
+    pixel_cache: Optional[Dict[Tuple[int, float], torch.Tensor]] = None,
+    orig_prefix_cache: Optional[Dict[Tuple[int, int, float], Tuple[torch.Tensor, np.ndarray]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Runs E3 causal degradation and temperature scaling on a single triplet:
@@ -107,12 +110,14 @@ def run_e3_triplet(
 
     orig_img = coco.load_image(image_id)
 
-    # 1. Reconstruct prompt and prefix
-    inputs_text = runner.processor(text=cfg.prompt, images=orig_img, return_tensors="pt")
-    prompt_ids = inputs_text["input_ids"].to(runner.device)
+    # 1. Reconstruct prompt and prefix (using caption_cache if provided)
+    if caption_cache is not None and image_id in caption_cache:
+        prompt_ids, gen_ids = caption_cache[image_id]
+    else:
+        prompt_ids, _, _, gen_ids = runner.generate_caption(orig_img)
+        if caption_cache is not None:
+            caption_cache[image_id] = (prompt_ids, gen_ids)
 
-    # Load caption gen_ids from cache or captions_data
-    cache_path = os.path.join(cfg.cache_dir, f"{image_id}.npz")
     # Prefix up to t
     orig_tok_str = record["orig_token"]
     alt_tok_str = orig_tok_str if (is_placebo == 1) else record["alt_token"]
@@ -123,10 +128,6 @@ def run_e3_triplet(
     if alt_tok_id == runner.tokenizer.unk_token_id or alt_tok_id is None:
         enc = runner.tokenizer.encode(" " + alt_tok_str, add_special_tokens=False)
         alt_tok_id = enc[0] if enc else 0
-
-    # Reconstruct prefix up to t
-    # From cache or running greedy caption
-    prompt_ids, _, _, gen_ids = runner.generate_caption(orig_img)
 
     orig_prefix_up_to_t = gen_ids[:, :t].clone()
     pert_prefix_up_to_t = gen_ids[:, :t].clone()
@@ -139,25 +140,42 @@ def run_e3_triplet(
     lambda_logits_pert: Dict[float, torch.Tensor] = {}
 
     for l_val in cfg.lambdas:
-        blended_img = blend_image_raw(orig_img, l_val)
-        inputs_blend = runner.processor(text=cfg.prompt, images=blended_img, return_tensors="pt")
-        pix_vals = inputs_blend["pixel_values"].to(runner.device)
+        # Preprocess / blend image using cache if available
+        pix_key = (image_id, l_val)
+        if pixel_cache is not None and pix_key in pixel_cache:
+            pix_vals = pixel_cache[pix_key]
+        else:
+            blended_img = blend_image_raw(orig_img, l_val)
+            inputs_blend = runner.processor(text=cfg.prompt, images=blended_img, return_tensors="pt")
+            pix_vals = inputs_blend["pixel_values"].to(runner.device)
+            if pixel_cache is not None:
+                pixel_cache[pix_key] = pix_vals
 
-        # Forward pass on original prefix
-        logits_o = runner.get_perturbed_target_logits(
-            prompt_ids=prompt_ids,
-            gen_ids_perturbed_prefix=orig_prefix_up_to_t,
-            pixel_values=pix_vals,
-        )
-        # Forward pass on perturbed prefix
-        logits_p = runner.get_perturbed_target_logits(
-            prompt_ids=prompt_ids,
-            gen_ids_perturbed_prefix=pert_prefix_up_to_t,
-            pixel_values=pix_vals,
-        )
+        # Forward pass on original prefix (cached per image, t, and lambda)
+        orig_key = (image_id, t, l_val)
+        if orig_prefix_cache is not None and orig_key in orig_prefix_cache:
+            logits_o, p_o = orig_prefix_cache[orig_key]
+        else:
+            logits_o = runner.get_perturbed_target_logits(
+                prompt_ids=prompt_ids,
+                gen_ids_perturbed_prefix=orig_prefix_up_to_t,
+                pixel_values=pix_vals,
+            )
+            p_o = compute_restricted_distribution(logits_o, obj_vocab.obj_ids)
+            if orig_prefix_cache is not None:
+                orig_prefix_cache[orig_key] = (logits_o, p_o)
 
-        p_o = compute_restricted_distribution(logits_o, obj_vocab.obj_ids)
-        p_p = compute_restricted_distribution(logits_p, obj_vocab.obj_ids)
+        # Forward pass on perturbed prefix (if placebo, pert is identical to orig)
+        if is_placebo == 1:
+            logits_p = logits_o
+            p_p = p_o
+        else:
+            logits_p = runner.get_perturbed_target_logits(
+                prompt_ids=prompt_ids,
+                gen_ids_perturbed_prefix=pert_prefix_up_to_t,
+                pixel_values=pix_vals,
+            )
+            p_p = compute_restricted_distribution(logits_p, obj_vocab.obj_ids)
 
         lambda_p_orig[l_val] = p_o
         lambda_p_pert[l_val] = p_p
