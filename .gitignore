@@ -30,6 +30,8 @@ results/*.md
 results/figs/
 results/exp2_logitlens/
 results/h1/
+results/pilot_h21_results/
+results_v2/
 results/*/*.csv
 results/*/*.jsonl
 results/*/*.json
