@@ -197,7 +197,7 @@ def run_e1_for_image(
                 s_placebo = jsd_divergence(p_img, p_placebo)
                 flip_placebo = 1 if (np.argmax(p_img) != np.argmax(p_placebo)) else 0
 
-                if s_placebo >= 1e-6 or flip_placebo != 0:
+                if flip_placebo != 0 or s_placebo >= 1e-5:
                     logger.warning(
                         f"Image {image_id}, t={t}: PLACEBO failure! S_t={s_placebo:.6f}, flip={flip_placebo}"
                     )

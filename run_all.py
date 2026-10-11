@@ -92,7 +92,18 @@ logger = logging.getLogger("confirmatory_v2")
 
 
 def setup_logging(log_path: str):
-    """Sets up dual logging to stdout and run.log."""
+    """Sets up dual logging to stdout and run.log with immediate line flushing."""
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+
     os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
     for h in list(logger.handlers):
         logger.removeHandler(h)
@@ -352,6 +363,13 @@ def main():
                     pbar.update(1)
                     pbar.set_postfix({"id": image_id, "objs": cap_info.get("T", 0), "flips": total_flips_k_le_2, "mem": mem_str})
 
+                    logger.info(
+                        f"Ảnh [{idx+1}/{len(target_image_ids)}] (ID: {image_id}) hoàn thành trong {time.time()-t0:.1f}s | "
+                        f"Objects: {cap_info.get('T', 0)} | Perturbations: {len(rows_e1)} | "
+                        f"Tổng Flips(k<=2): {total_flips_k_le_2} | RAM GPU: {mem_str}"
+                    )
+                    sys.stdout.flush()
+
                 except Exception as e:
                     logger.error(f"Error processing image {image_id}: {e}", exc_info=True)
                     pbar.update(1)
@@ -426,8 +444,9 @@ def main():
 
                 pbar_e3.update(1)
                 pbar_e3.set_postfix({"triplet": idx + 1, "k": trip.get("k", 0)})
-                if (idx + 1) % 25 == 0 or (idx + 1) == len(all_triplets):
+                if (idx + 1) % 10 == 0 or (idx + 1) == len(all_triplets):
                     logger.info(f"E3 Tiến độ: {idx+1}/{len(all_triplets)} triplets ({((idx+1)/len(all_triplets))*100:.1f}%)")
+                    sys.stdout.flush()
 
     # =========================================================================
     # STAGE ANALYSIS: Pre-registered Statistical Testing
