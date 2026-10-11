@@ -40,15 +40,15 @@ E3_TEMP_COLUMNS = [
 ]
 
 
-def ensure_csv_headers_e3(e3_path: str, e3_temp_path: str):
+def ensure_csv_headers_e3(e3_path: str, e3_temp_path: str, overwrite: bool = False):
     """Ensures CSV headers exist for E3 files."""
-    if not os.path.isfile(e3_path):
+    if overwrite or not os.path.isfile(e3_path):
         os.makedirs(os.path.dirname(os.path.abspath(e3_path)), exist_ok=True)
         with open(e3_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(E3_COLUMNS)
 
-    if not os.path.isfile(e3_temp_path):
+    if overwrite or not os.path.isfile(e3_temp_path):
         os.makedirs(os.path.dirname(os.path.abspath(e3_temp_path)), exist_ok=True)
         with open(e3_temp_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)

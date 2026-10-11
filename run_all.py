@@ -123,6 +123,8 @@ def parse_args():
     parser.add_argument("--val2014_dir", type=str, default=None, help="COCO val2014 image directory override")
     parser.add_argument("--instances_json", type=str, default=None, help="COCO instances_val2014.json override")
     parser.add_argument("--results_dir", type=str, default=None, help="Output directory override")
+    parser.add_argument("--skip_e2", action="store_true", default=False,
+                        help="Skip Stage E2 free-generation to focus compute strictly on E1 and E3")
     parser.add_argument("--resume", action="store_true", default=True, help="Resume from progress.jsonl if exists")
     return parser.parse_args()
 
@@ -293,7 +295,7 @@ def main():
     # STAGE E1 & E2 (or M2): Single in-place progress bar for image iteration
     # =========================================================================
     run_e1 = (args.stage in ["e1", "m2", "all"])
-    run_e2 = (args.stage in ["e2", "all"])
+    run_e2 = (args.stage in ["e2", "all"]) and not args.skip_e2
 
     # Determine image subset for M2
     target_image_ids = sampled_image_ids[:30] if args.stage == "m2" else sampled_image_ids
@@ -376,6 +378,7 @@ def main():
     # =========================================================================
     if args.stage in ["e3", "all"]:
         logger.info("--- EXECUTING STAGE E3 (Causal Image Degradation & Entropy Control) ---")
+        ensure_csv_headers_e3(cfg.records_e3_path, cfg.records_e3_temp_path, overwrite=True)
         if os.path.isfile(cfg.records_e1_path):
             df_e1 = pd.read_csv(cfg.records_e1_path)
             e1_records = df_e1.to_dict(orient="records")
